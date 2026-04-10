@@ -1,0 +1,68 @@
+[project]
+name = "startriage"
+dynamic = ["version"]
+description = "Triage Ubuntu bugs, pull requests, forum posts and more"
+license = "GPL-3.0"
+license-files = ["LICENSE"]
+maintainers = [
+    { name = "Ubuntu Server Team", email = "ubuntu-server@lists.ubuntu.com" },
+]
+readme = "doc/README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "pyyaml",
+    "python-debian",
+    "launchpadlib",
+    "lazr.restfulclient",
+]
+
+[project.scripts]
+startriage = "startriage.__main__:main"
+
+[project.urls]
+homepage = "https://github.com/ubuntu/startriage"
+source = "https://github.com/ubuntu/startriage"
+issues = "https://github.com/ubuntu/startriage/issues"
+releasenotes = "https://github.com/ubuntu/startriage/releases"
+
+[build-system]
+requires = ["setuptools", "setuptools-scm"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["startriage"]
+
+[tool.setuptools_scm]
+version_scheme = "only-version"
+
+[dependency-groups]
+dev = [
+    { include-group = "docs" },
+    "pytest>=9",
+    "pytest-cov>=7",
+    "ruff",
+    "ty",
+]
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+extend-exclude = [
+    ".idea",
+    ".mypy_cache",
+    ".venv*",
+    "docs",
+    "debian",
+    "__pycache__",
+    "*.egg_info",
+]
+
+[tool.ruff.lint]
+select = ["E", "W", "B", "F", "I", "C", "N", "PL", "RUF", "PYI", "I001"]
+ignore = ["E722", "PLR2004", "PLR0912", "PLR5501", "PLC0415", "PLR0911", "C408", "PLR0915"]
+mccabe.max-complexity = 25
+pylint.max-args = 10
+
+[tool.pytest.ini_options]
+xfail_strict = true
+testpaths = ["tests"]

@@ -1,0 +1,23 @@
+name: Continuous Integration
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    # https://canonical-self-hosted-github-runner-docs.readthedocs-hosted.com/en/latest/usage/available_runners/#available-runners
+    #runs-on: [self-hosted, linux, X64, noble, small]
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+      - name: install uv
+        uses: astral-sh/setup-uv@v7
+          with:
+            enable-cache: true
+
+      - name: run tests
+        run: |
+          uv sync
+          uv run ruff check .
+          uv run ty check .
+          uv run pytest .

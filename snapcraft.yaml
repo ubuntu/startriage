@@ -1,28 +1,30 @@
-name: dsctriage
+name: startriage
 summary: Application to keep track of updates on a Discourse server
 description: |
-  Output comments from a Discourse server for triage. This application is used by the Ubuntu Server team to keep up with
-  suggested fixes and issues in the Ubuntu Server Guide at https://ubuntu.com/server/docs. It can, however, also be used
-  to look into Discourse posts on any Discourse server, or other sections of Ubuntu's documentation.
+  Triaging of current bugs, pull requests, discourse posts, etc for Ubuntu.
 
-base: core20
+base: core24
 type: app
 version: git
 confinement: strict
-grade: stable
+grade: beta
 
 apps:
-  dsctriage:
-    command: bin/dsctriage
+  startriage:
+    command: bin/startriage
     plugs:
-      [network, network-bind]
+      - network
+      - network-bind
 
 parts:
-  dsctriage:
+  startriage:
     plugin: python
-    source: https://github.com/lvoytek/discourse-triage
+    source: https://github.com/ubuntu/startriage
     source-type: git
+    #stage-packages:
+    #  - python3-launchpadlib
+    #  - python3-debian
 
 layout:
-  /etc/dsctriage.conf:
-    bind-file: $SNAP_DATA/etc/dsctriage.conf
+  /etc/startriage.conf:
+    bind-file: $SNAP_DATA/etc/startriage.conf
