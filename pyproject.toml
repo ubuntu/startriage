@@ -10,6 +10,9 @@ maintainers = [
 readme = "doc/README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "aiohttp",
+    "pydantic>=2.0",
+    "tomli-w",
     "pyyaml",
     "python-debian",
     "launchpadlib",
@@ -30,16 +33,17 @@ requires = ["setuptools", "setuptools-scm"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["startriage"]
+packages = {find = {where = ["."]}}
+package-data = {"startriage" = ["data/*.toml"]}
 
 [tool.setuptools_scm]
 version_scheme = "only-version"
 
 [dependency-groups]
 dev = [
-    { include-group = "docs" },
     "pytest>=9",
-    "pytest-cov>=7",
+    "pytest-cov>=6",
+    "pytest-asyncio>=0.24",
     "ruff",
     "ty",
 ]

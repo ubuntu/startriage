@@ -1,0 +1,24 @@
+[general]
+discourse_site = "https://discourse.ubuntu.com"
+lp_expire_tagged = 60
+lp_expire = 180
+lp_extended = false
+lp_update_filter = "theirs"
+savebugs_dir = "~/savebugs"
+
+[team.ubuntu-server]
+lp_team = "ubuntu-server"
+lp_todo_tag = "server-todo"
+lp_ignore_packages = [
+    "cloud-init",
+    "curtin",
+    "juju",
+    "juju-core",
+    "lxc",
+    "lxd",
+    "maas",
+    "ubuntu-advantage-tools",
+]
+discourse_categories = "project/server,documentation/server-guide"
+github_org = "canonical"
+github_repos = ["ubuntu-maintainers-handbook", "ubuntu-server-documentation"]

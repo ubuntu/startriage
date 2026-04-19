@@ -1,7 +1,17 @@
 name: startriage
-summary: Application to keep track of updates on a Discourse server
+summary: Unified triage tool for Ubuntu bugs, documentation, and forum posts
 description: |
-  Triaging of current bugs, pull requests, discourse posts, etc for Ubuntu.
+  startriage is a unified triage tool for Ubuntu developer teams.
+  It combines bug triage (Launchpad), documentation triage (GitHub),
+  and forum post triage (Discourse) into a single command.
+
+  Run daily triage with:
+    startriage list -t ubuntu-server
+
+  For weekly bug housekeeping:
+    startriage list todo -t ubuntu-server
+
+  Configuration is read from ~/.config/startriage.toml.
 
 base: core24
 type: app
@@ -15,16 +25,10 @@ apps:
     plugs:
       - network
       - network-bind
+      - home
 
 parts:
   startriage:
     plugin: python
     source: https://github.com/ubuntu/startriage
     source-type: git
-    #stage-packages:
-    #  - python3-launchpadlib
-    #  - python3-debian
-
-layout:
-  /etc/startriage.conf:
-    bind-file: $SNAP_DATA/etc/startriage.conf
