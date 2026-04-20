@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
 import sys
 import time
@@ -73,7 +74,7 @@ class DiscourseTriage:
     site: str | None = None
     had_updates: bool = False
 
-    def print_section(
+    async def print_section(
         self,
         fmt: OutputFormat = OutputFormat.TERMINAL,
         open_in_browser: bool = False,
@@ -102,20 +103,13 @@ class DiscourseTriage:
                 result.category, self.start, self.end, open_in_browser, shorten_links, result.site, fmt, out
             )
 
-    def write_markdown(self, path: str, open_in_browser: bool = False) -> None:
+    async def write_markdown(self, path: str, open_in_browser: bool = False) -> None:
         """Write markdown-formatted output to a file."""
-        import io
-        import logging as _logging
 
         buf = io.StringIO()
-        # Suppress duplicate info-log output during the buffer render
-        root = _logging.getLogger()
-        old_level = root.level
-        root.setLevel(_logging.WARNING)
-        try:
-            self.print_section(fmt=OutputFormat.MARKDOWN, open_in_browser=False, shorten_links=False, out=buf)
-        finally:
-            root.setLevel(old_level)
+        await self.print_section(
+            fmt=OutputFormat.MARKDOWN, open_in_browser=False, shorten_links=False, out=buf
+        )
         with open(path, "a", encoding="utf-8") as fh:
             fh.write(buf.getvalue())
 
@@ -270,8 +264,6 @@ def _print_category_comments(
 
         # In markdown mode, the tree goes inside a fenced code block to preserve indentation
         if fmt == OutputFormat.MARKDOWN:
-            import io
-
             tree_buf = io.StringIO()
             tree_out = tree_buf
         else:

@@ -139,7 +139,7 @@ def parse_interval(arg: str | None, relative_to: date | None = None) -> tuple[da
     """
     if arg is None:
         yesterday = (relative_to or datetime.now().date()) - timedelta(days=1)
-        if yesterday.weekday() == 6:  # Sunday → include full weekend
+        if yesterday.weekday() == 6:  # Sunday → include friday + full weekend
             return yesterday - timedelta(days=2), yesterday
         return yesterday, yesterday
 

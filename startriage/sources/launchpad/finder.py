@@ -13,25 +13,22 @@ Performance improvements over ustriage:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from .triage import LaunchpadTriage
-
 import asyncio
 import logging
-import os
 from datetime import date, datetime, timedelta, timezone
-from typing import Literal
 
 import aiohttp
+import debian.deb822
+import platformdirs
 from launchpadlib.credentials import UnencryptedFileCredentialStore
 from launchpadlib.launchpad import Launchpad
 
-from startriage.config import GeneralConfig, TeamConfig
+from startriage.config import TeamConfig
+from startriage.enums import FetchMode
 
-from .models import Task
+from .models import LaunchpadTasks, Task
 
+# apparently not exported by launchpadlib...
 POSSIBLE_BUG_STATUSES = [
     "New",
     "Incomplete",
@@ -60,8 +57,10 @@ PACKAGING_TASK_TAGS = [
 
 
 def connect_launchpad() -> Launchpad:
-    cred_location = os.path.expanduser("~/.lp_creds")
-    credential_store = UnencryptedFileCredentialStore(cred_location)
+    cred_dir = platformdirs.user_data_path("startriage")
+    cred_dir.mkdir(parents=True, exist_ok=True)
+    cred_location = cred_dir / "lp_creds"
+    credential_store = UnencryptedFileCredentialStore(str(cred_location))
     return Launchpad.login_with(
         "startriage", "production", version="devel", credential_store=credential_store
     )
@@ -111,7 +110,7 @@ def _last_activity_ours(task_obj, activity_subscriber_links: set[str]) -> bool:
     return all(a[1] in activity_subscriber_links for a in recent)
 
 
-async def _fetch_unapproved_bugs_for_series(
+async def fetch_unapproved_bugs_for_series(
     session: aiohttp.ClientSession, changes_urls: list[tuple[str, str]]
 ) -> dict[str, set[str]]:
     """Return {source_package: {bug_number, ...}} for a batch of (pkg, changes_url) pairs.
@@ -124,8 +123,6 @@ async def _fetch_unapproved_bugs_for_series(
             async with session.get(url) as resp:
                 if resp.status != 200:
                     return pkg, []
-                import debian.deb822
-
                 text = await resp.text()
                 changes = debian.deb822.Changes(text)
                 bugs_str = changes.get("Launchpad-Bugs-Fixed", "")
@@ -141,31 +138,26 @@ async def _fetch_unapproved_bugs_for_series(
     return pkg_bugs
 
 
-def _sync_fetch_bugs(
+def fetch_bugs(
+    lp: Launchpad,
     team_config: TeamConfig,
-    general_config: GeneralConfig,
     start_date: date | None,
     end_date: date | None,
-    mode: Literal["triage", "todo", "subscribed"],
-) -> tuple[list[Task], list[tuple[str, str]]]:  # tasks, [(pkg, changes_url), ...]
+    mode: FetchMode,
+    update_filter: str | None,
+) -> LaunchpadTasks:
     """Synchronous LP fetch - run inside asyncio.to_thread().
 
-    Returns tasks plus (pkg_name, changes_url) string pairs for unapproved-queue
-    checking. All LP object access stays in this function; only plain data leaves.
+    All LP object access stays in this function; only plain data and Task
+    objects leave (Task objects hold LP objects but are only rendered after
+    the thread completes, never concurrently).
     """
-    lp = connect_launchpad()
-    Task.LP = lp
-    Task.NOWORK_BUG_STATUSES = NOWORK_BUG_STATUSES
-    Task.OPEN_BUG_STATUSES = OPEN_BUG_STATUSES
 
     ubuntu = lp.distributions["Ubuntu"]
     team = lp.people[team_config.lp_team]
 
-    try:
-        activity_people = lp.people[team_config.lp_team].participants
-        activity_links = {p.self_link for p in activity_people}
-    except Exception:
-        activity_links = set()
+    activity_people = lp.people[team_config.lp_team].participants
+    activity_links = {p.self_link for p in activity_people}
 
     start_dt = (
         datetime.combine(start_date, datetime.min.time()).replace(tzinfo=timezone.utc) if start_date else None
@@ -176,62 +168,66 @@ def _sync_fetch_bugs(
         else None
     )
 
-    if mode == "triage":
-        bugs_start = {
-            (t.bug_link, _fast_target_name(t)): t
-            for t in _search_tasks_all_series(
-                ubuntu,
-                modified_since=start_dt,
-                structural_subscriber=team,
-                status=POSSIBLE_BUG_STATUSES,
-            )
-        }
-        bugs_end = {
-            (t.bug_link, _fast_target_name(t)): t
-            for t in _search_tasks_all_series(
-                ubuntu,
-                modified_since=end_dt,
-                structural_subscriber=team,
-                status=POSSIBLE_BUG_STATUSES,
-            )
-        }
-        already_subscribed = {
-            (t.bug_link, _fast_target_name(t)): t
-            for t in _search_tasks_all_series(
-                ubuntu,
-                modified_since=start_dt,
-                structural_subscriber=team,
-                bug_subscriber=team,
-                status=POSSIBLE_BUG_STATUSES,
-            )
-        }
-        bugs_in_range = {k: v for k, v in bugs_start.items() if k not in bugs_end}
+    match mode:
+        case FetchMode.triage:
+            bugs_start = {
+                (t.bug_link, _fast_target_name(t)): t
+                for t in _search_tasks_all_series(
+                    ubuntu,
+                    modified_since=start_dt,
+                    structural_subscriber=team,
+                    status=POSSIBLE_BUG_STATUSES,
+                )
+            }
+            bugs_end = {
+                (t.bug_link, _fast_target_name(t)): t
+                for t in _search_tasks_all_series(
+                    ubuntu,
+                    modified_since=end_dt,
+                    structural_subscriber=team,
+                    status=POSSIBLE_BUG_STATUSES,
+                )
+            }
+            already_subscribed = {
+                (t.bug_link, _fast_target_name(t)): t
+                for t in _search_tasks_all_series(
+                    ubuntu,
+                    modified_since=start_dt,
+                    structural_subscriber=team,
+                    bug_subscriber=team,
+                    status=POSSIBLE_BUG_STATUSES,
+                )
+            }
+            bugs_in_range = {k: v for k, v in bugs_start.items() if k not in bugs_end}
 
-    elif mode == "todo":
-        bugs_in_range = {
-            (t.bug_link, _fast_target_name(t)): t
-            for t in _search_tasks_all_series(
-                ubuntu,
-                bug_subscriber=team,
-                tags=[team_config.lp_todo_tag, "-bot-stop-nagging"],
-                tags_combinator="All",
-                status=TRACKED_BUG_STATUSES,
-            )
-        }
-        already_subscribed = {}
+        case FetchMode.todo:
+            bugs_in_range = {
+                (t.bug_link, _fast_target_name(t)): t
+                for t in _search_tasks_all_series(
+                    ubuntu,
+                    bug_subscriber=team,
+                    tags=[team_config.lp_todo_tag, "-bot-stop-nagging"],
+                    tags_combinator="All",
+                    status=TRACKED_BUG_STATUSES,
+                )
+            }
+            already_subscribed = {}
 
-    else:  # subscribed
-        bugs_in_range = {
-            (t.bug_link, _fast_target_name(t)): t
-            for t in _search_tasks_all_series(
-                ubuntu,
-                bug_subscriber=team,
-                tags=["-bot-stop-nagging", f"-{team_config.lp_todo_tag}"],
-                tags_combinator="All",
-                status=OPEN_BUG_STATUSES,
-            )
-        }
-        already_subscribed = bugs_in_range
+        case FetchMode.subscribed:
+            bugs_in_range = {
+                (t.bug_link, _fast_target_name(t)): t
+                for t in _search_tasks_all_series(
+                    ubuntu,
+                    bug_subscriber=team,
+                    tags=["-bot-stop-nagging", f"-{team_config.lp_todo_tag}"],
+                    tags_combinator="All",
+                    status=OPEN_BUG_STATUSES,
+                )
+            }
+            already_subscribed = bugs_in_range
+
+        case _:
+            raise ValueError(f"Unknown fetch mode: {mode!r}")
 
     tasks = set()
     for (bug_link, _), lp_task in bugs_in_range.items():
@@ -242,8 +238,7 @@ def _sync_fetch_bugs(
         is_ours = _last_activity_ours(lp_task, activity_links)
 
         # Apply update filter (triage mode only)
-        if mode == "triage":
-            update_filter = general_config.lp_update_filter
+        if mode == FetchMode.triage and update_filter:
             if update_filter == "theirs" and is_ours:
                 continue
             if update_filter == "ours" and not is_ours:
@@ -262,52 +257,11 @@ def _sync_fetch_bugs(
     # so no LP objects escape to the async event loop
     changes_pairs: list[tuple[str, str]] = []
     for series_name in active_series:
-        try:
-            series_obj = ubuntu.getSeries(name_or_version=series_name)
-            uploads = list(series_obj.getPackageUploads(pocket="Proposed", status="Unapproved"))
-            for upload in uploads:
-                url = upload.changes_file_url
-                if url:
-                    changes_pairs.append((upload.package_name, str(url)))
-        except Exception as exc:
-            logging.debug("Error collecting unapproved uploads for %s: %s", series_name, exc)
+        series_obj = ubuntu.getSeries(name_or_version=series_name)
+        uploads = list(series_obj.getPackageUploads(pocket="Proposed", status="Unapproved"))
+        for upload in uploads:
+            url = upload.changes_file_url
+            if url:
+                changes_pairs.append((upload.package_name, str(url)))
 
-    return list(tasks), changes_pairs
-
-
-async def fetch_bugs(
-    team_config: TeamConfig,
-    general_config: GeneralConfig,
-    start_date: date | None,
-    end_date: date | None,
-    mode: Literal["triage", "todo", "subscribed"] = "triage",
-) -> "LaunchpadTriage":
-    """Fetch Launchpad bugs, then bulk-check unapproved queue concurrently."""
-    from .triage import LaunchpadTriage  # avoid circular at module load
-
-    logging.info("Fetching Launchpad bugs (this may take a while)…")
-    tasks, changes_pairs = await asyncio.to_thread(
-        _sync_fetch_bugs, team_config, general_config, start_date, end_date, mode
-    )
-    logging.info("Launchpad: %d bugs fetched. Checking unapproved queue…", len(tasks))
-
-    # Bulk unapproved check: all .changes file fetches are concurrent via aiohttp.
-    # No LP objects are used here - only plain (pkg, url) string pairs.
-    async with aiohttp.ClientSession() as session:
-        pkg_bugs = await _fetch_unapproved_bugs_for_series(session, changes_pairs)
-
-    Task._unapproved_cache = {}
-    for pkg, bug_nums in pkg_bugs.items():
-        for bug_num in bug_nums:
-            Task._unapproved_cache[(bug_num, pkg)] = True
-
-    triage = LaunchpadTriage(
-        tasks=tasks,
-        start=start_date,
-        end=end_date,
-        team_config=team_config,
-        general_config=general_config,
-        mode=mode,
-    )
-    logging.info("Launchpad: done.")
-    return triage
+    return LaunchpadTasks(list(tasks), lp, changes_pairs, NOWORK_BUG_STATUSES, OPEN_BUG_STATUSES)

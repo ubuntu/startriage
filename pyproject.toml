@@ -17,6 +17,7 @@ dependencies = [
     "python-debian",
     "launchpadlib",
     "lazr.restfulclient",
+    "platformdirs",
 ]
 
 [project.scripts]

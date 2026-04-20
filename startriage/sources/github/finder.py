@@ -8,14 +8,10 @@ import logging
 import os
 import subprocess
 from datetime import date, datetime
-from typing import TYPE_CHECKING
 
 import aiohttp
 
 from .models import Issue, PullRequest
-
-if TYPE_CHECKING:
-    from .triage import GithubTriage
 
 _GH_API = "https://api.github.com"
 _GITHUB_TOKEN_ENV = "GITHUB_TOKEN"
@@ -106,25 +102,3 @@ async def fetch_repo(
                 issues.append(issue)
 
     return prs, issues
-
-
-async def find(
-    org: str,
-    repos: list[str],
-    start: date | None,
-    end: date | None,
-    token: str | None = None,
-) -> "GithubTriage":
-    """Fetch GitHub data for all repos concurrently."""
-    from .triage import GithubTriage, RepoResult  # avoid circular at module load
-
-    headers = _make_headers(token)
-    async with aiohttp.ClientSession(headers=headers) as session:
-        tasks = [fetch_repo(session, org, repo, start, end) for repo in repos]
-        results = await asyncio.gather(*tasks)
-
-    triage = GithubTriage(org=org, start=start, end=end)
-    for repo, (prs, issues) in zip(repos, results, strict=False):
-        triage.results.append(RepoResult(repo=repo, org=org, prs=prs, issues=issues))
-
-    return triage

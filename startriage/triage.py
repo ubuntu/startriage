@@ -7,19 +7,16 @@ import logging
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Literal
 
 import aiohttp
 
 from startriage.config import GeneralConfig, TeamConfig
-from startriage.output import OutputFormat, print_section_header
-from startriage.sources.discourse.triage import DiscourseTriage
+from startriage.enums import FetchMode, UpdateFilter
+from startriage.output import OutputFormat
 from startriage.sources.discourse.triage import find as discourse_find
-from startriage.sources.github.finder import find as github_find
 from startriage.sources.github.finder import get_github_token
-from startriage.sources.github.triage import GithubTriage
-from startriage.sources.launchpad.finder import fetch_bugs
-from startriage.sources.launchpad.triage import LaunchpadTriage
+from startriage.sources.github.triage import find as github_find
+from startriage.sources.launchpad.triage import find as launchpad_find
 
 SOURCES_ALL = ("launchpad", "discourse", "github")
 SOURCE_ALIASES = {
@@ -50,10 +47,10 @@ class TriageRunOptions:
     shorten_links: bool = True
     show_expiration: bool = True
     fmt: OutputFormat = OutputFormat.TERMINAL
-    markdown_path: str | None = None
-    update_filter: Literal["theirs", "ours", "all"] | None = (
-        None  # overrides general_config.lp_update_filter if set
-    )
+    markdown_path: Path | None = None
+    update_filter: UpdateFilter | None = None
+    age: datetime | None = None
+    old: datetime | None = None
 
 
 async def run_triage(
@@ -77,9 +74,16 @@ async def run_triage(
         discourse_end_exclusive = None
 
     async def _fetch_lp():
-        if opts.update_filter:
-            general_config.lp_update_filter = opts.update_filter
-        return await fetch_bugs(team_config, general_config, opts.start, opts.end, mode="triage")
+        return await launchpad_find(
+            team_config,
+            general_config,
+            opts.start,
+            opts.end,
+            mode=FetchMode.triage,
+            update_filter=opts.update_filter,
+            age=opts.age,
+            old=opts.old,
+        )
 
     async def _fetch_discourse():
         assert discourse_start is not None and discourse_end_exclusive is not None
@@ -112,53 +116,44 @@ async def run_triage(
         fetch_tasks["github"] = asyncio.create_task(_fetch_github())
 
     # Print sections in canonical order as each completes
-    async def _await_and_print(key: str, task: asyncio.Task, print_fn):
+    async def _await_and_print(source: str, task: asyncio.Task):
         result = await task
-        print_fn(result)
-        return key, result
+        match source:
+            case "launchpad":
+                await result.print_section(fmt=opts.fmt, open_in_browser=opts.open_in_browser)
+            case "github":
+                await result.print_section(fmt=opts.fmt, open_in_browser=opts.open_in_browser)
+            case "discourse":
+                await result.print_section(
+                    fmt=opts.fmt, open_in_browser=opts.open_in_browser, shorten_links=opts.shorten_links
+                )
+            case _:
+                raise RuntimeError(f"Unhandled source {source!r}")
+        return source, result
 
-    results = await asyncio.gather(
-        *[
-            _await_and_print(key, t, lambda r, k=key: _print_result(k, r, opts))
-            for key, t in fetch_tasks.items()
-        ]
-    )
+    results = await asyncio.gather(*[_await_and_print(source, t) for source, t in fetch_tasks.items()])
 
-    # Write markdown output if requested
+    # create markdown template
     if opts.markdown_path:
         # Truncate/create file first
-        Path(opts.markdown_path).write_text("")
+        opts.markdown_path.write_text("")
         result_map = dict(results)
-        for key in ("launchpad", "github", "discourse"):
-            r = result_map.get(key)
-            if r:
-                r.write_markdown(opts.markdown_path)
-        with open(opts.markdown_path, "a", encoding="utf-8") as fh:
+        for source in ("launchpad", "github", "discourse"):
+            r = result_map[source]
+            await r.write_markdown(opts.markdown_path)
+
+        with opts.markdown_path.open("a", encoding="utf-8") as fh:
             fh.write("\n# Proposed Migration\n\n")
         logging.info("Markdown written to %s", opts.markdown_path)
-
-    # Always print Proposed Migration header to terminal
-    print_section_header("Proposed Migration")
-
-
-def _print_result(source: str, result, opts: TriageRunOptions) -> None:
-    if source == "launchpad" and isinstance(result, LaunchpadTriage):
-        result.print_section(fmt=opts.fmt, open_in_browser=opts.open_in_browser)
-    elif source == "github" and isinstance(result, GithubTriage):
-        result.print_section(fmt=opts.fmt, open_in_browser=opts.open_in_browser)
-    elif source == "discourse" and isinstance(result, DiscourseTriage):
-        result.print_section(
-            fmt=opts.fmt, open_in_browser=opts.open_in_browser, shorten_links=opts.shorten_links
-        )
 
 
 async def run_todo(
     team_config: TeamConfig,
     general_config: GeneralConfig,
     opts: TriageRunOptions,
-    filename_save: str | None = None,
-    filename_compare: str | None = None,
-    filename_postponed: str | None = None,
+    filename_save: Path | None = None,
+    filename_compare: Path | None = None,
+    filename_postponed: Path | None = None,
     no_save: bool = False,
     limit: int | None = None,
     subscribed: bool = False,
@@ -166,8 +161,8 @@ async def run_todo(
 ) -> None:
     """Todo / housekeeping triage: tag-filtered bugs, no date filter."""
 
-    mode = "subscribed" if subscribed else "todo"
-    lp_triage = await fetch_bugs(team_config, general_config, None, None, mode=mode)
+    mode = FetchMode.subscribed if subscribed else FetchMode.todo
+    lp_triage = await launchpad_find(team_config, general_config, None, None, mode=mode)
 
     if json_output:
         print(lp_triage.to_json())
@@ -177,28 +172,28 @@ async def run_todo(
     savebugs_dir = general_config.savebugs_dir
     if not no_save:
         auto_save = savebugs_dir / f"todo-{datetime.now().strftime('%Y-%m-%d')}.yaml"
-        save_path = filename_save or str(auto_save)
+        save_path = filename_save or auto_save
 
         if filename_compare is None:
             existing = sorted(savebugs_dir.glob("todo-*.yaml"))
-            compare_path = str(existing[-1]) if existing else None
+            compare_path = existing[-1] if existing else None
         else:
             compare_path = filename_compare
 
         auto_postponed = savebugs_dir / "postponed.yaml"
-        postponed_path = filename_postponed or (str(auto_postponed) if auto_postponed.exists() else None)
+        postponed_path = filename_postponed or (auto_postponed if auto_postponed.exists() else None)
     else:
         save_path = compare_path = postponed_path = None
 
     if save_path and not no_save:
         logging.info("Will save bug list to: %s", save_path)
 
-    lp_triage.print_section(
+    await lp_triage.print_section(
         fmt=opts.fmt,
         open_in_browser=opts.open_in_browser,
-        filename_save=save_path if not no_save else None,
-        filename_compare=compare_path,
-        filename_postponed=postponed_path,
+        file_save=save_path if not no_save else None,
+        file_compare=compare_path,
+        file_postponed=postponed_path,
         limit=limit,
     )
 
@@ -212,4 +207,4 @@ async def run_todo(
             None,
             token=token,
         )
-        gh_triage.print_section(fmt=opts.fmt)
+        await gh_triage.print_section(fmt=opts.fmt)

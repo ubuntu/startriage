@@ -2,22 +2,30 @@
 
 from __future__ import annotations
 
+import asyncio
+import dataclasses
+import io
 import json
 import logging
 import re
 import sys
-import time
 import webbrowser
-from dataclasses import dataclass
-from datetime import date
-from typing import Literal
+from dataclasses import dataclass, field
+from datetime import date, datetime
+from pathlib import Path
+from typing import IO
 
+import aiohttp
 import yaml
+from launchpadlib.launchpad import Launchpad
 
 from startriage.config import GeneralConfig, TeamConfig
+from startriage.dates import reverse_auto_date_range
+from startriage.enums import FetchMode
 from startriage.output import OutputFormat, hyperlink
 
-from .models import STR_STRIKETHROUGH, Task
+from .finder import connect_launchpad, fetch_bugs, fetch_unapproved_bugs_for_series
+from .models import STR_STRIKETHROUGH, LaunchpadTasks, RenderContext, Task
 
 ANSI_ESCAPE = re.compile(
     r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])",
@@ -29,27 +37,30 @@ ANSI_ESCAPE = re.compile(
 class LaunchpadTriage:
     """Holds all fetched Launchpad results for one triage run."""
 
-    tasks: list[Task]
+    tasks: LaunchpadTasks
     start: date | None
     end: date | None
     team_config: TeamConfig
     general_config: GeneralConfig
-    mode: Literal["triage", "todo", "subscribed"] = "triage"
+    mode: FetchMode = FetchMode.triage
+    unapproved_cache: dict[tuple[str, str], bool] = field(default_factory=dict)
+    age: datetime | None = None
+    old: datetime | None = None
 
     @property
     def had_updates(self) -> bool:
         return bool(self.tasks)
 
-    def print_section(
+    async def print_section(
         self,
         fmt: OutputFormat = OutputFormat.TERMINAL,
         open_in_browser: bool = False,
         extended: bool | None = None,
-        filename_save: str | None = None,
-        filename_compare: str | None = None,
-        filename_postponed: str | None = None,
+        file_save: Path | None = None,
+        file_compare: Path | None = None,
+        file_postponed: Path | None = None,
         limit: int | None = None,
-        out=None,
+        out: IO[str] | None = None,
     ) -> None:
         """Print the # Bugs section."""
         if out is None:
@@ -57,12 +68,9 @@ class LaunchpadTriage:
         if extended is None:
             extended = self.general_config.lp_extended
 
-        _print = lambda s="": print(s, file=out)  # noqa: E731
-
-        _print("\n# Bugs\n")
+        print("\n# Bugs\n", file=out)
 
         if self.mode == "triage" and self.start and self.end:
-            from startriage.dates import reverse_auto_date_range
 
             pretty_start = self.start.strftime("%Y-%m-%d (%A)")
             pretty_end = self.end.strftime("%Y-%m-%d (%A)")
@@ -74,98 +82,104 @@ class LaunchpadTriage:
             if label:
                 logging.info('Date range identified as: "%s"', label)
 
-        _print_bugs(
+        ctx = RenderContext(
+            nowork_statuses=self.tasks.nowork_statuses,
+            open_statuses=self.tasks.open_statuses,
+            unapproved_cache=self.unapproved_cache,
+            age=self.age,
+            old=self.old,
+        )
+        await _print_bugs(
             self.tasks,
+            ctx,
             fmt,
             open_in_browser,
             extended,
-            filename_save,
-            filename_compare,
-            filename_postponed,
+            file_save,
+            file_compare,
+            file_postponed,
             limit,
             out,
-            order_by_date=(self.mode == "subscribed"),
+            order_by_date=(self.mode == FetchMode.subscribed),
         )
 
-    def write_markdown(self, path: str, extended: bool | None = None) -> None:
+    async def write_markdown(self, path: Path, extended: bool | None = None) -> None:
         """Append markdown-formatted output to a file."""
-        import io
-        import logging as _logging
-
         if extended is None:
             extended = self.general_config.lp_extended
         buf = io.StringIO()
-        root = _logging.getLogger()
-        old_level = root.level
-        root.setLevel(_logging.WARNING)
-        try:
-            self.print_section(fmt=OutputFormat.MARKDOWN, extended=extended, out=buf)
-        finally:
-            root.setLevel(old_level)
-        with open(path, "a", encoding="utf-8") as fh:
-            fh.write(buf.getvalue())
+        await self.print_section(fmt=OutputFormat.MARKDOWN, extended=extended, out=buf)
+        with path.open("a", encoding="utf-8") as fd:
+            fd.write(buf.getvalue())
 
     def to_json(self) -> str:
-        return json.dumps([t.to_dict() for t in self.tasks], indent=4, default=str)
+        ctx = RenderContext(
+            nowork_statuses=self.tasks.nowork_statuses,
+            open_statuses=self.tasks.open_statuses,
+            unapproved_cache=self.unapproved_cache,
+            age=self.age,
+            old=self.old,
+        )
+        return json.dumps([t.to_dict(ctx) for t in self.tasks.tasks], indent=4, default=str)
 
 
-def _load_former_bugs(filename_compare: str | None) -> list:
-    if not filename_compare:
+def _load_former_bugs(file_compare: Path | None) -> list:
+    if not file_compare:
         return []
     try:
-        with open(filename_compare, encoding="utf-8") as f:
+        with file_compare.open(encoding="utf-8") as f:
             return yaml.safe_load(f) or []
     except FileNotFoundError:
         return []
 
 
-def _load_postponed_bugs(filename_postponed: str | None) -> list[str]:
-    from datetime import datetime
-
+def _load_postponed_bugs(out: IO[str], file_postponed: Path | None) -> list[str]:
     postponed = []
-    logging.info("\nPostponed bugs:")
-    if filename_postponed:
+    print("\nPostponed bugs:", file=out)
+    if file_postponed:
         try:
-            with open(filename_postponed, encoding="utf-8") as f:
+            with file_postponed.open(encoding="utf-8") as f:
                 pbugs = yaml.safe_load(f) or []
             for pbug in pbugs:
                 until = datetime.strptime(pbug[1], "%Y-%m-%d")
                 if until.date() > datetime.now().date():
-                    logging.info("%s postponed until %s", pbug[0], pbug[1])
+                    print(f"{pbug[0]} postponed until {pbug[1]}", file=out)
                     postponed.append(pbug[0])
         except FileNotFoundError:
             pass
     if not postponed:
-        logging.info("<None>")
-    logging.info("")
+        print("<None>", file=out)
+    print("", file=out)
     return postponed
 
 
-def _print_bugs(  # noqa: PLR0913
-    tasks: list[Task],
+async def _print_bugs(  # noqa: PLR0913
+    lp_tasks: LaunchpadTasks,
+    ctx: RenderContext,
     fmt: OutputFormat,
     open_in_browser: bool,
     extended: bool,
-    filename_save: str | None,
-    filename_compare: str | None,
-    filename_postponed: str | None,
+    file_save: Path | None,
+    file_compare: Path | None,
+    file_postponed: Path | None,
     limit: int | None,
-    out,
+    out: IO[str],
     order_by_date: bool = False,
     is_sorted: bool = False,
     former_bugs: list | None = None,
     postponed_bugs: list[str] | None = None,
 ) -> None:
+    tasks = lp_tasks.tasks
     if former_bugs is None:
-        former_bugs = _load_former_bugs(filename_compare)
-    if postponed_bugs is None:
-        postponed_bugs = _load_postponed_bugs(filename_postponed)
+        former_bugs = _load_former_bugs(file_compare)
+    if postponed_bugs is None and fmt != OutputFormat.MARKDOWN:
+        postponed_bugs = _load_postponed_bugs(out, file_postponed)
 
-    sorted_tasks = (
-        tasks
-        if is_sorted
-        else sorted(tasks, key=Task.sort_date if order_by_date else Task.sort_key, reverse=order_by_date)
-    )
+    if is_sorted:
+        sorted_tasks = tasks
+    else:
+        sort_key = Task.sort_date if order_by_date else Task.sort_key
+        sorted_tasks = sorted(tasks, key=sort_key, reverse=order_by_date)
 
     bugid_len = max((len(t.number) for t in sorted_tasks), default=0)
 
@@ -176,8 +190,9 @@ def _print_bugs(  # noqa: PLR0913
     if limit is not None and len(sorted_tasks) > limit:
         logging.info("Displaying top & bottom %d", limit)
         logging.info("# Recent tasks #")
-        _print_bugs(
-            sorted_tasks[:limit],
+        await _print_bugs(
+            dataclasses.replace(lp_tasks, tasks=sorted_tasks[:limit]),
+            ctx,
             fmt,
             open_in_browser,
             extended,
@@ -192,8 +207,9 @@ def _print_bugs(  # noqa: PLR0913
         )
         logging.info("---------------------------------------------------")
         logging.info("# Oldest tasks #")
-        _print_bugs(
-            sorted_tasks[-limit:],
+        await _print_bugs(
+            dataclasses.replace(lp_tasks, tasks=sorted_tasks[-limit:]),
+            ctx,
             fmt,
             open_in_browser,
             extended,
@@ -209,59 +225,71 @@ def _print_bugs(  # noqa: PLR0913
         return
 
     if fmt == OutputFormat.TERMINAL:
-        logging.info(Task.get_header(extended=extended))
+        print(Task.get_header(extended=extended), file=out)
 
-    initial_open = True
     reported: list[str] = []
     further = ""
     for task in sorted_tasks:
         if task.number in reported:
-            sep = ", " if further and not further.startswith("Also:") else "Also: "
-            further += sep + f"[{task.compose_dup(extended=extended)}]"
+            arrow = "\N{DOWNWARDS ARROW WITH TIP RIGHTWARDS}"
+            if further and not further.startswith(f" {arrow}"):
+                sep = ","
+            else:
+                sep = f" {arrow}"
+            further += f"{sep} [{task.compose_dup(extended=extended)}]"
             continue
         if further:
-            logging.info(further)
+            print(further, file=out)
             further = ""
 
-        newbug = bool(filename_compare and task.number not in former_bugs)
+        newbug = bool(file_compare and task.number not in former_bugs)
 
-        if fmt == OutputFormat.MARKDOWN:
-            bug_link = hyperlink(task.url, f"LP #{task.number}", fmt)
-            print(
-                f"### {bug_link} {task.status} {task.src} - {task.short_title}\n",
-                file=out,
-            )
-            print(f"{task.src}: \n", file=out)  # action stub
-        else:
-            bugtext = task.compose_pretty(bugid_len, shortlinks=True, extended=extended, newbug=newbug)
-            if task.number in postponed_bugs:
-                bugtext = ANSI_ESCAPE.sub("", bugtext)
-                bugtext = STR_STRIKETHROUGH.join(bugtext)
-            logging.info(bugtext)
-
-        if open_in_browser:
-            if initial_open:
-                initial_open = False
-                webbrowser.open(task.url)
-            else:
-                webbrowser.open_new_tab(task.url)
-            time.sleep(0.5)
+        match fmt:
+            case OutputFormat.MARKDOWN:
+                bug_link = hyperlink(task.url, f"LP #{task.number}", fmt)
+                print(
+                    f"### {bug_link} {task.status} {task.src} - {task.short_title}\n",
+                    file=out,
+                )
+                print(f"{task.src}: \n", file=out)  # action stub
+            case OutputFormat.TERMINAL:
+                bugtext = task.get_line(ctx, bugid_len, shortlinks=True, extended=extended, newbug=newbug)
+                if task.number in postponed_bugs:
+                    # Strip ANSI color codes before applying combining strikethrough,
+                    # since inserting U+0336 inside escape sequences would corrupt them.
+                    bugtext = ANSI_ESCAPE.sub("", bugtext)
+                    bugtext = STR_STRIKETHROUGH.join(bugtext)
+                print(bugtext, file=out)
+            case _:
+                raise ValueError(f"Unknown output format: {fmt!r}")
 
         reported.append(task.number)
 
+    if open_in_browser:
+        initial_open = True
+        for task in sorted_tasks:
+            if task.number not in reported:
+                if initial_open:
+                    webbrowser.open(task.url)
+                    initial_open = False
+                else:
+                    webbrowser.open_new_tab(task.url)
+                await asyncio.sleep(0.2)
+
     if further:
-        logging.info(further)
+        print(further, file=out)
 
-    if filename_save:
-        with open(filename_save, "w", encoding="utf-8") as f:
+    if file_save:
+        with open(file_save, "w", encoding="utf-8") as f:
             yaml.dump(reported, stream=f)
-        logging.info("Saved reported bugs in %s", filename_save)
+        logging.info("Saved reported bugs in %s", file_save)
 
-    if filename_compare:
+    if file_compare:
         closed = [x for x in former_bugs if x not in reported]
-        logging.info("\nBugs gone compared with %s:", filename_compare)
-        _print_bugs(
-            _bugs_to_tasks(closed),
+        print(f"\nBugs gone compared with {file_compare!r}:", file=out)
+        await _print_bugs(
+            dataclasses.replace(lp_tasks, tasks=_bugs_to_tasks(closed, lp_tasks.lp)),
+            ctx,
             fmt,
             False,
             extended,
@@ -276,20 +304,56 @@ def _print_bugs(  # noqa: PLR0913
         )
 
 
-def _bugs_to_tasks(bug_numbers: list[str]) -> list[Task]:
-    from startriage.sources.launchpad.models import Task as TaskModel
-
-    task_class = TaskModel
-
-    lp = task_class.LP
+def _bugs_to_tasks(bug_numbers: list[str], lp: Launchpad) -> list[Task]:
     if not lp:
         return []
     tasks = []
     for number in bug_numbers:
         for lp_task in lp.bugs[number].bug_tasks:
             tasks.append(
-                task_class.create_from_launchpadlib_object(
-                    lp_task, subscribed=False, last_activity_ours=False
-                )
+                Task.create_from_launchpadlib_object(lp_task, subscribed=False, last_activity_ours=False)
             )
     return tasks
+
+
+async def find(
+    team_config: TeamConfig,
+    general_config: GeneralConfig,
+    start_date: date | None,
+    end_date: date | None,
+    mode: FetchMode = FetchMode.triage,
+    update_filter: str | None = None,
+    age: datetime | None = None,
+    old: datetime | None = None,
+) -> LaunchpadTriage:
+    """Fetch Launchpad bugs, then bulk-check unapproved queue concurrently."""
+    effective_update_filter = update_filter or general_config.lp_update_filter
+
+    logging.info("Fetching Launchpad bugs (this may take a while)…")
+    lp = connect_launchpad()
+    lp_tasks = await asyncio.to_thread(
+        fetch_bugs, lp, team_config, start_date, end_date, mode, effective_update_filter
+    )
+    logging.info("Launchpad: %d bugs fetched. Checking unapproved queue…", len(lp_tasks.tasks))
+
+    async with aiohttp.ClientSession() as session:
+        unapproved_bugs = await fetch_unapproved_bugs_for_series(session, lp_tasks.changes_pairs)
+
+    unapproved_cache: dict[tuple[str, str], bool] = {}
+    for pkg, bug_nums in unapproved_bugs.items():
+        for bug_num in bug_nums:
+            unapproved_cache[(bug_num, pkg)] = True
+
+    triage = LaunchpadTriage(
+        tasks=lp_tasks,
+        start=start_date,
+        end=end_date,
+        team_config=team_config,
+        general_config=general_config,
+        mode=mode,
+        unapproved_cache=unapproved_cache,
+        age=age,
+        old=old,
+    )
+    logging.info("Launchpad: done.")
+    return triage

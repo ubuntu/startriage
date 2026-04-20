@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import tomllib
+from importlib.resources import files
 from pathlib import Path
-from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
-_DEFAULTS_PATH = Path(__file__).parent / "data" / "defaults.toml"
+from startriage.enums import UpdateFilter
+
 DEFAULT_USER_CONFIG = Path("~/.config/startriage.toml")
 
 
@@ -19,8 +20,8 @@ class GeneralConfig(BaseModel):
     lp_expire_tagged: int = 60
     lp_expire: int = 180
     lp_extended: bool = False
-    lp_update_filter: Literal["theirs", "ours", "all"] = "theirs"
-    savebugs_dir: Path = Path("~/src/ubuntu/mnt/savebugs")
+    lp_update_filter: UpdateFilter = UpdateFilter.theirs
+    savebugs_dir: Path = Path("~/savebugs")
     default_team: str | None = None
 
     @model_validator(mode="after")
@@ -64,6 +65,16 @@ def _load_toml(path: Path) -> dict:
         return {}
 
 
+def _load_defaults() -> dict:
+    """Load the shipped defaults.toml using importlib.resources.
+
+    Works in the git repo, as an installed package, a .deb, or a snap.
+    """
+    data_pkg = files("startriage") / "data" / "defaults.toml"
+    with data_pkg.open("rb") as f:
+        return tomllib.load(f)
+
+
 def load_config(user_config_path: Path | None = None) -> StarTriageConfig:
     """Load and merge defaults with user config, validated via pydantic.
 
@@ -73,7 +84,7 @@ def load_config(user_config_path: Path | None = None) -> StarTriageConfig:
       that team, missing fields fall back to the defaults entry
     - Teams only in defaults remain available; teams only in user config are added
     """
-    defaults = _load_toml(_DEFAULTS_PATH)
+    defaults = _load_defaults()
 
     path = (user_config_path or DEFAULT_USER_CONFIG).expanduser()
     user = _load_toml(path)

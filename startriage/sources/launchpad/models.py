@@ -1,21 +1,22 @@
 """Launchpad Task model for startriage.
 
-Ported from ustriage/task.py with:
+Ported from ustriage/task.py with these improvements:
 - _sibling_tasks cached via @lru_cache (was recomputed on each call)
-- _is_in_unapproved removed from the model; unapproved check is done
-  in bulk in finder.py (one getPackageUploads call per series, not per bug)
-- get_changelog_versions made async-ready (called by finder after LP fetch)
+- Unapproved-queue check done in bulk in finder.py (one getPackageUploads()
+  per series, not per bug); result passed via RenderContext, not class state.
+- All mutable rendering state (bug statuses, unapproved cache, age thresholds)
+  is passed explicitly via RenderContext — no class-level injection.
 """
 
 from __future__ import annotations
 
 import re
-import urllib
-import urllib.request
+from dataclasses import dataclass, field
+from datetime import datetime
 from functools import lru_cache
-from typing import Any, ClassVar
+from typing import Any
 
-import debian.deb822
+from launchpadlib.launchpad import Launchpad
 
 DISTRIBUTION_RESOURCE_TYPE_LINK = "https://api.launchpad.net/devel/#distribution"
 DISTRIBUTION_SOURCE_PACKAGE_RESOURCE_TYPE_LINK = (
@@ -24,20 +25,21 @@ DISTRIBUTION_SOURCE_PACKAGE_RESOURCE_TYPE_LINK = (
 SOURCE_PACKAGE_RESOURCE_TYPE_LINK = "https://api.launchpad.net/devel/#source_package"
 PROJECT_RESOURCE_TYPE_LINK = "https://api.launchpad.net/devel/#project"
 
-COLOR_CYAN = "\033[0;36m"
-COLOR_GREEN = "\033[0;32m"
-COLOR_YELLOW = "\033[0;33m"
+COLOR_STATUS_WORKNEEDED = "\033[0;34m"  # blue
+COLOR_STATUS_NOWORK = "\033[0;32m"  # green
+COLOR_STATUS_OPEN = "\033[0;31m"  # red
 COLOR_RESET = "\033[0m"
 STR_STRIKETHROUGH = "\u0336"
 
-BUG_URL_BASE = "https://bugs.launchpad.net/ubuntu/+bug/"
+LONG_URL_ROOT = "https://bugs.launchpad.net/ubuntu/+bug/"
+SHORTLINK_ROOT = "https://pad.lv/"
 LPBUGREF = "LP: #"
 
 
 def truncate_string(text: str, length: int = 20) -> str:
     s = str(text)
     if len(s) > length:
-        return s[: length - 1] + "…"
+        return s[: length - 1] + "\u2026"
     return s
 
 
@@ -45,27 +47,28 @@ def mark(text: str, color: str) -> str:
     return color + text + COLOR_RESET
 
 
-def _find_changes_bugs(changes_url: str) -> list[str]:
-    with urllib.request.urlopen(changes_url) as fobj:
-        changes = debian.deb822.Changes(fobj)
-    try:
-        return changes["Launchpad-Bugs-Fixed"].split()
-    except KeyError:
-        return []
+@dataclass
+class RenderContext:
+    """Render-time state passed explicitly to Task display methods.
+
+    Avoids class-level mutation; each triage run can have its own context.
+    """
+
+    nowork_statuses: list[str] = field(default_factory=list)
+    open_statuses: list[str] = field(default_factory=list)
+    # {(bug_number, src_package): True} -- populated by finder bulk unapproved check
+    unapproved_cache: dict[tuple[str, str], bool] = field(default_factory=dict)
+    # datetime thresholds for U (recently updated) and O (old) flags
+    age: datetime | None = None
+    old: datetime | None = None
 
 
 class Task:
-    """Launchpad Bug Task with cached properties and bulk unapproved support."""
+    """Launchpad Bug Task with cached properties.
 
-    # Class-level state set by finder before rendering
-    LP = None
-    NOWORK_BUG_STATUSES: ClassVar[list[str]] = []
-    OPEN_BUG_STATUSES: ClassVar[list[str]] = []
-    AGE = None  # datetime: threshold for U flag
-    OLD = None  # datetime: threshold for O flag
-
-    # Set by finder after bulk unapproved lookup: {(bug_number, src): bool}
-    _unapproved_cache: ClassVar[dict[tuple[str, str], bool]] = {}
+    Mutable rendering state (bug status lists, unapproved cache, age thresholds)
+    is NOT stored on this class -- it is passed via RenderContext to display methods.
+    """
 
     def __init__(self, lp_task=None) -> None:
         self.subscribed: bool | None = None
@@ -112,6 +115,17 @@ class Task:
     @property
     @lru_cache(maxsize=None)  # noqa: B019
     def short_title(self) -> str:
+        """Bug title stripped of the leading LP task prefix.
+
+        LP task titles follow the pattern:
+          "Bug #NNN in <target>: <actual title>"
+
+        The word offset at which the actual title starts depends on the target type:
+          - distribution (ubuntu):                    word 4   "Bug #N in ubuntu: ..."
+          - distribution_source_package (ubuntu/pkg): word 5   "Bug #N in pkg (ubuntu): ..."
+          - source_package (series/pkg):              word 6   "Bug #N in pkg (ubuntu/series): ..."
+          - project:                                  word 7   "Bug #N in project (display): ..."
+        """
         start_field = {
             DISTRIBUTION_RESOURCE_TYPE_LINK: 4,
             DISTRIBUTION_SOURCE_PACKAGE_RESOURCE_TYPE_LINK: 5,
@@ -154,7 +168,11 @@ class Task:
 
     @property
     def url(self) -> str:
-        return BUG_URL_BASE + self.number
+        return LONG_URL_ROOT + self.number
+
+    @property
+    def shortlink(self) -> str:
+        return SHORTLINK_ROOT + self.number
 
     @property
     def bug_reference(self) -> str:
@@ -163,7 +181,7 @@ class Task:
     @property
     @lru_cache(maxsize=None)  # noqa: B019
     def _sibling_tasks(self) -> dict[str, Any]:
-        """All sibling tasks for this package across series - cached."""
+        """All sibling tasks for this package across series -- cached."""
         siblings = {}
         for lp_task in self.obj.bug.bug_tasks:
             parts = str(lp_task).split("/")
@@ -175,32 +193,15 @@ class Task:
             siblings[series] = lp_task
         return siblings
 
-    def is_in_unapproved(self) -> bool:
-        """Check bulk unapproved cache populated by finder."""
-        return Task._unapproved_cache.get((self.number, self.src), False)
+    def is_in_unapproved(self, ctx: RenderContext) -> bool:
+        """Check bulk unapproved cache from RenderContext."""
+        return ctx.unapproved_cache.get((self.number, self.src), False)
 
-    def get_releases(self, length: int) -> str:
-        info = ""
-        for series, lp_task in self._sibling_tasks.items():
-            char = "D" if series[0] == "-" else series[0].upper()
-            if lp_task.status in Task.NOWORK_BUG_STATUSES:
-                char = mark(char, COLOR_GREEN)
-            elif self.is_in_unapproved():
-                char = mark(char, COLOR_CYAN)
-            elif lp_task.status in Task.OPEN_BUG_STATUSES:
-                char = mark(char, COLOR_YELLOW)
-            info += char
+    def _is_updated(self, ctx: RenderContext) -> bool:
+        return bool(ctx.age and self.date_last_updated > ctx.age)
 
-        printable_len = len(re.sub("[^A-Z]+", "", info))
-        if length > printable_len:
-            info += " " * (length - printable_len)
-        return info
-
-    def _is_updated(self) -> bool:
-        return bool(Task.AGE and self.date_last_updated > Task.AGE)
-
-    def _is_old(self) -> bool:
-        return bool(Task.OLD and self.date_last_updated < Task.OLD)
+    def _is_old(self, ctx: RenderContext) -> bool:
+        return bool(ctx.old and self.date_last_updated < ctx.old)
 
     def _is_verification_needed(self) -> bool:
         return any("verification-needed-" in t for t in self.tags)
@@ -208,29 +209,59 @@ class Task:
     def _is_verification_done(self) -> bool:
         return any("verification-done-" in t for t in self.tags)
 
-    def get_flags(self, newbug: bool = False) -> str:
-        v_needed = mark("v", COLOR_CYAN)
-        v_done = mark("V", COLOR_GREEN)
+    def get_releases(self, ctx: RenderContext, length: int) -> str:
+        info = ""
+        for series, lp_task in self._sibling_tasks.items():
+            char = "D" if series[0] == "-" else series[0].upper()
+            if lp_task.status in ctx.nowork_statuses:
+                char = mark(char, COLOR_STATUS_NOWORK)
+            elif self.is_in_unapproved(ctx):
+                char = mark(char, COLOR_STATUS_WORKNEEDED)
+            elif lp_task.status in ctx.open_statuses:
+                char = mark(char, COLOR_STATUS_OPEN)
+            info += char
+
+        printable_len = len(re.sub("[^A-Z]+", "", info))
+        if length > printable_len:
+            info += " " * (length - printable_len)
+        return info
+
+    def get_flags(self, ctx: RenderContext, newbug: bool = False) -> str:
+        v_needed = mark("v", COLOR_STATUS_WORKNEEDED)
+        v_done = mark("V", COLOR_STATUS_NOWORK)
         return (
             ("*" if self.subscribed else " ")
-            + ("+" if self.last_activity_ours else " ")
-            + ("U" if self._is_updated() else "O" if self._is_old() else " ")
+            + ("+" if not self.last_activity_ours else " ")
+            + ("U" if self._is_updated(ctx) else "O" if self._is_old(ctx) else " ")
             + ("N" if newbug else " ")
             + (v_needed if self._is_verification_needed() else " ")
             + (v_done if self._is_verification_done() else " ")
         )
 
-    def compose_pretty(
-        self, bugid_len: int, shortlinks: bool = True, extended: bool = False, newbug: bool = False
+    @staticmethod
+    def get_header(extended: bool = False) -> str:
+        text = "%-12s | %-6s | %-7s | %-13s | %-19s |" % ("Bug", "Flags", "Release", "Status", "Package")
+        if extended:
+            text += " %-8s | %-10s | %-13s |" % ("Last Upd", "Prio", "Assignee")
+        text += " %-73s |" % "Title"
+        return text
+
+    def get_line(
+        self,
+        ctx: RenderContext,
+        bugid_len: int,
+        shortlinks: bool = True,
+        extended: bool = False,
+        newbug: bool = False,
     ) -> str:
         bug_ref = self.bug_reference if shortlinks else self.url
-        fmt_len = bugid_len + len(LPBUGREF if shortlinks else BUG_URL_BASE)
+        fmt_len = bugid_len + len(LPBUGREF if shortlinks else LONG_URL_ROOT)
         bug_str = f"%-{fmt_len}s" % bug_ref
 
         text = "%-12s | %6s | %-7s | %-13s | %-19s |" % (
             bug_str,
-            self.get_flags(newbug),
-            self.get_releases(7),
+            self.get_flags(ctx, newbug),
+            self.get_releases(ctx, 7),
             self.status,
             truncate_string(self.src, 19),
         )
@@ -240,21 +271,13 @@ class Task:
                 self.importance,
                 truncate_string(self.assignee or "", 12),
             )
-        text += " %-60s |" % truncate_string(self.short_title, 60)
+        text += " %-73s |" % truncate_string(self.short_title, 73)
         return text
 
     def compose_dup(self, extended: bool = False) -> str:
-        text = f"{self.status},{truncate_string(self.src, 16)}"
+        text = f"{truncate_string(self.src, 16)}:{self.status}"
         if extended and self.assignee:
-            text += f",{truncate_string(self.assignee, 9)}"
-        return text
-
-    @staticmethod
-    def get_header(extended: bool = False) -> str:
-        text = "%-12s | %-6s | %-7s | %-13s | %-19s |" % ("Bug", "Flags", "Release", "Status", "Package")
-        if extended:
-            text += " %-8s | %-10s | %-13s |" % ("Last Upd", "Prio", "Assignee")
-        text += " %-60s |" % "Title"
+            text += f"@{truncate_string(self.assignee, 9)}"
         return text
 
     def sort_key(self):
@@ -263,15 +286,14 @@ class Task:
     def sort_date(self):
         return self.date_last_updated
 
-    @lru_cache(maxsize=None)  # noqa: B019
-    def to_dict(self) -> dict:
+    def to_dict(self, ctx: RenderContext) -> dict:
         sibling_status = {}
         for series, lp_task in self._sibling_tasks.items():
-            if lp_task.status in Task.NOWORK_BUG_STATUSES:
+            if lp_task.status in ctx.nowork_statuses:
                 sibling_status[series] = "closed"
-            elif self.is_in_unapproved():
+            elif self.is_in_unapproved(ctx):
                 sibling_status[series] = "unapproved"
-            elif lp_task.status in Task.OPEN_BUG_STATUSES:
+            elif lp_task.status in ctx.open_statuses:
                 sibling_status[series] = "open"
             else:
                 sibling_status[series] = "pending"
@@ -291,9 +313,19 @@ class Task:
             "assignee": self.assignee,
             "is_maintainer_subscribed": self.subscribed,
             "is_last_activity_by_maintainer": self.last_activity_ours,
-            "is_updated_recently": self._is_updated(),
-            "is_old": self._is_old(),
+            "is_updated_recently": self._is_updated(ctx),
+            "is_old": self._is_old(ctx),
             "is_verification_needed": self._is_verification_needed(),
             "is_verification_done": self._is_verification_done(),
             "sibling_task_status": sibling_status,
         }
+
+
+@dataclass
+class LaunchpadTasks:
+    tasks: list[Task]
+    lp: Launchpad
+
+    changes_pairs: list[tuple[str, str]] = field(default_factory=list)
+    nowork_statuses: list[str] = field(default_factory=list)
+    open_statuses: list[str] = field(default_factory=list)

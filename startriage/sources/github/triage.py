@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 import sys
 from dataclasses import dataclass, field
 from datetime import date
 
+import aiohttp
+
 from startriage.output import OutputFormat, hyperlink
 
+from .finder import _make_headers, fetch_repo
 from .models import Issue, PullRequest
 
 
@@ -44,7 +48,7 @@ class GithubTriage:
     def had_updates(self) -> bool:
         return any(r.had_updates for r in self.results)
 
-    def print_section(
+    async def print_section(
         self,
         fmt: OutputFormat = OutputFormat.TERMINAL,
         open_in_browser: bool = False,
@@ -83,7 +87,7 @@ class GithubTriage:
             else:
                 _print("No new or updated issues.\n")
 
-    def write_markdown(self, path: str) -> None:
+    async def write_markdown(self, path: str) -> None:
         """Append markdown-formatted output to a file."""
         import io
         import logging as _logging
@@ -93,8 +97,28 @@ class GithubTriage:
         old_level = root.level
         root.setLevel(_logging.WARNING)
         try:
-            self.print_section(fmt=OutputFormat.MARKDOWN, out=buf)
+            await self.print_section(fmt=OutputFormat.MARKDOWN, out=buf)
         finally:
             root.setLevel(old_level)
         with open(path, "a", encoding="utf-8") as fh:
             fh.write(buf.getvalue())
+
+
+async def find(
+    org: str,
+    repos: list[str],
+    start: date | None,
+    end: date | None,
+    token: str | None = None,
+) -> GithubTriage:
+    """Fetch GitHub data for all repos concurrently."""
+    headers = _make_headers(token)
+    async with aiohttp.ClientSession(headers=headers) as session:
+        tasks = [fetch_repo(session, org, repo, start, end) for repo in repos]
+        results = await asyncio.gather(*tasks)
+
+    triage = GithubTriage(org=org, start=start, end=end)
+    for repo, (prs, issues) in zip(repos, results, strict=False):
+        triage.results.append(RepoResult(repo=repo, org=org, prs=prs, issues=issues))
+
+    return triage
