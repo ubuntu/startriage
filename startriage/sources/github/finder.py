@@ -47,16 +47,43 @@ def _make_headers(token: str | None) -> dict[str, str]:
     return headers
 
 
-async def _get_json(session: aiohttp.ClientSession, url: str) -> list | dict | None:
-    try:
-        async with session.get(url) as resp:
-            if resp.status == 200:
-                return await resp.json(content_type=None)
-            logging.debug("GitHub HTTP %s: %s", resp.status, url)
-            return None
-    except (aiohttp.ClientError, json.JSONDecodeError) as exc:
-        logging.debug("GitHub error fetching %s: %s", url, exc)
-        return None
+async def _get_all_pages(session: aiohttp.ClientSession, url: str) -> list:
+    """Fetch all pages of a GitHub paginated endpoint, following Link headers."""
+    results: list = []
+    next_url: str | None = url
+    while next_url:
+        try:
+            async with session.get(next_url) as resp:
+                if resp.status != 200:
+                    logging.debug("GitHub HTTP %s: %s", resp.status, next_url)
+                    break
+                try:
+                    page = await resp.json(content_type=None)
+                except json.JSONDecodeError as exc:
+                    logging.debug("GitHub JSON error fetching %s: %s", next_url, exc)
+                    break
+                if isinstance(page, list):
+                    results.extend(page)
+                else:
+                    results.append(page)
+                # Parse Link header for the next page
+                link_header = resp.headers.get("Link", "")
+                next_url = _parse_next_link(link_header)
+        except aiohttp.ClientError as exc:
+            logging.debug("GitHub error fetching %s: %s", next_url, exc)
+            break
+    return results
+
+
+def _parse_next_link(link_header: str) -> str | None:
+    """Extract the 'next' URL from a GitHub Link response header."""
+    for part in (p.strip() for p in link_header.split(",")):
+        # Each part looks like: <url>; rel="next"
+        if 'rel="next"' in part:
+            url_part = part.split(";")[0].strip()
+            if url_part.startswith("<") and url_part.endswith(">"):
+                return url_part[1:-1]
+    return None
 
 
 def _in_range(dt: datetime | None, start: date | None, end: date | None) -> bool:
@@ -72,33 +99,41 @@ async def fetch_repo(
     repo: str,
     start: date | None,
     end: date | None,
+    label: str | None = None,
 ) -> tuple[list[PullRequest], list[Issue]]:
-    """Fetch PRs and Issues for one repo updated within [start, end]."""
+    """Fetch PRs and Issues for one repo updated within [start, end].
+
+    When *label* is given, only items carrying that label are returned.
+    All pages are fetched via the GitHub Link-header pagination protocol.
+    """
     base = f"{_GH_API}/repos/{org}/{repo}"
+    pulls_url = f"{base}/pulls?state=open&sort=updated&direction=desc&per_page=100"
+    issues_url = f"{base}/issues?state=open&sort=updated&direction=desc&per_page=100"
+    if label:
+        pulls_url += f"&labels={label}"
+        issues_url += f"&labels={label}"
 
     prs_data, issues_data = await asyncio.gather(
-        _get_json(session, f"{base}/pulls?state=open&sort=updated&direction=desc&per_page=100"),
-        _get_json(session, f"{base}/issues?state=open&sort=updated&direction=desc&per_page=100"),
+        _get_all_pages(session, pulls_url),
+        _get_all_pages(session, issues_url),
     )
 
     prs: list[PullRequest] = []
-    if prs_data and isinstance(prs_data, list):
-        for d in prs_data:
-            pr = PullRequest.from_api_dict(d)
-            if start is None or _in_range(pr.created_at, start, end) or _in_range(pr.updated_at, start, end):
-                prs.append(pr)
+    for d in prs_data:
+        pr = PullRequest.from_api_dict(d)
+        if start is None or _in_range(pr.created_at, start, end) or _in_range(pr.updated_at, start, end):
+            prs.append(pr)
 
     issues: list[Issue] = []
-    if issues_data and isinstance(issues_data, list):
-        for d in issues_data:
-            if "pull_request" in d:
-                continue  # GH issues endpoint also returns PRs
-            issue = Issue.from_api_dict(d)
-            if (
-                start is None
-                or _in_range(issue.created_at, start, end)
-                or _in_range(issue.updated_at, start, end)
-            ):
-                issues.append(issue)
+    for d in issues_data:
+        if "pull_request" in d:
+            continue  # GH issues endpoint also returns PRs
+        issue = Issue.from_api_dict(d)
+        if (
+            start is None
+            or _in_range(issue.created_at, start, end)
+            or _in_range(issue.updated_at, start, end)
+        ):
+            issues.append(issue)
 
     return prs, issues

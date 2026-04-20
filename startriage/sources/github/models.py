@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 
 
@@ -23,6 +23,7 @@ class PullRequest:
     created_at: datetime | None
     updated_at: datetime | None
     state: str
+    labels: list[str] = field(default_factory=list)
 
     @classmethod
     def from_api_dict(cls, d: dict) -> PullRequest:
@@ -33,6 +34,7 @@ class PullRequest:
             created_at=_parse_dt(d.get("created_at")),
             updated_at=_parse_dt(d.get("updated_at")),
             state=d.get("state", ""),
+            labels=[lbl["name"] for lbl in d.get("labels", [])],
         )
 
 
@@ -44,6 +46,7 @@ class Issue:
     created_at: datetime | None
     updated_at: datetime | None
     state: str
+    labels: list[str] = field(default_factory=list)
 
     @classmethod
     def from_api_dict(cls, d: dict) -> Issue:
@@ -54,4 +57,5 @@ class Issue:
             created_at=_parse_dt(d.get("created_at")),
             updated_at=_parse_dt(d.get("updated_at")),
             state=d.get("state", ""),
+            labels=[lbl["name"] for lbl in d.get("labels", [])],
         )

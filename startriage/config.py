@@ -21,12 +21,13 @@ class GeneralConfig(BaseModel):
     lp_expire: int = 180
     lp_extended: bool = False
     lp_update_filter: UpdateFilter = UpdateFilter.theirs
-    savebugs_dir: Path = Path("~/savebugs")
+    savebugs_dir: Path | None = None
     default_team: str | None = None
 
     @model_validator(mode="after")
     def expand_savebugs_dir(self) -> GeneralConfig:
-        self.savebugs_dir = self.savebugs_dir.expanduser()
+        if self.savebugs_dir is not None:
+            self.savebugs_dir = self.savebugs_dir.expanduser()
         return self
 
 
@@ -37,8 +38,10 @@ class TeamConfig(BaseModel):
     lp_todo_tag: str
     lp_ignore_packages: list[str] = []
     discourse_categories: str
+    discourse_triage_category_id: int | None = None
     github_org: str
     github_repos: list[str]
+    github_todo_label: str | None = None
 
 
 class StarTriageConfig(BaseModel):

@@ -18,6 +18,8 @@ from typing import Any
 
 from launchpadlib.launchpad import Launchpad
 
+from startriage.output import OutputFormat, hyperlink
+
 DISTRIBUTION_RESOURCE_TYPE_LINK = "https://api.launchpad.net/devel/#distribution"
 DISTRIBUTION_SOURCE_PACKAGE_RESOURCE_TYPE_LINK = (
     "https://api.launchpad.net/devel/#distribution_source_package"
@@ -253,10 +255,11 @@ class Task:
         shortlinks: bool = True,
         extended: bool = False,
         newbug: bool = False,
+        fmt: OutputFormat = OutputFormat.TERMINAL,
     ) -> str:
         bug_ref = self.bug_reference if shortlinks else self.url
         fmt_len = bugid_len + len(LPBUGREF if shortlinks else LONG_URL_ROOT)
-        bug_str = f"%-{fmt_len}s" % bug_ref
+        bug_str = hyperlink(self.url, f"%-{fmt_len}s" % bug_ref, fmt)
 
         text = "%-12s | %6s | %-7s | %-13s | %-19s |" % (
             bug_str,
@@ -267,7 +270,7 @@ class Task:
         )
         if extended:
             text += " %8s | %-10s | %-13s |" % (
-                self.date_last_updated.strftime("%d.%m.%y"),
+                self.date_last_updated.strftime("%y-%m-%d"),
                 self.importance,
                 truncate_string(self.assignee or "", 12),
             )

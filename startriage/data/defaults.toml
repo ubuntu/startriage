@@ -4,7 +4,6 @@ lp_expire_tagged = 60
 lp_expire = 180
 lp_extended = false
 lp_update_filter = "theirs"
-savebugs_dir = "~/savebugs"
 
 [team.ubuntu-server]
 lp_team = "ubuntu-server"
@@ -20,5 +19,7 @@ lp_ignore_packages = [
     "ubuntu-advantage-tools",
 ]
 discourse_categories = "project/server,documentation/server-guide"
+discourse_triage_category_id = 475
 github_org = "canonical"
 github_repos = ["ubuntu-maintainers-handbook", "ubuntu-server-documentation"]
+github_todo_label = "server-todo"

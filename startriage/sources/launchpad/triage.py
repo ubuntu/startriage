@@ -16,13 +16,12 @@ from pathlib import Path
 from typing import IO
 
 import aiohttp
-import yaml
 from launchpadlib.launchpad import Launchpad
 
 from startriage.config import GeneralConfig, TeamConfig
-from startriage.dates import reverse_auto_date_range
 from startriage.enums import FetchMode
 from startriage.output import OutputFormat, hyperlink
+from startriage.savebugs import BugPersistor
 
 from .finder import connect_launchpad, fetch_bugs, fetch_unapproved_bugs_for_series
 from .models import STR_STRIKETHROUGH, LaunchpadTasks, RenderContext, Task
@@ -56,9 +55,7 @@ class LaunchpadTriage:
         fmt: OutputFormat = OutputFormat.TERMINAL,
         open_in_browser: bool = False,
         extended: bool | None = None,
-        file_save: Path | None = None,
-        file_compare: Path | None = None,
-        file_postponed: Path | None = None,
+        bug_persistor: BugPersistor | None = None,
         limit: int | None = None,
         out: IO[str] | None = None,
     ) -> None:
@@ -68,19 +65,12 @@ class LaunchpadTriage:
         if extended is None:
             extended = self.general_config.lp_extended
 
-        print("\n# Bugs\n", file=out)
+        print("# Launchpad Bugs\n", file=out)
 
-        if self.mode == "triage" and self.start and self.end:
-
-            pretty_start = self.start.strftime("%Y-%m-%d (%A)")
-            pretty_end = self.end.strftime("%Y-%m-%d (%A)")
-            if self.start == self.end:
-                logging.info("Bugs last updated on %s", pretty_start)
-            else:
-                logging.info("Bugs last updated between %s and %s inclusive", pretty_start, pretty_end)
-            label = reverse_auto_date_range(self.start, self.end)
-            if label:
-                logging.info('Date range identified as: "%s"', label)
+        if self.mode == FetchMode.todo:
+            print(f"tag: {self.team_config.lp_todo_tag}\n", file=out)
+        elif self.mode == FetchMode.subscribed:
+            print(f"subscribed: {self.team_config.lp_team}\n", file=out)
 
         ctx = RenderContext(
             nowork_statuses=self.tasks.nowork_statuses,
@@ -95,13 +85,13 @@ class LaunchpadTriage:
             fmt,
             open_in_browser,
             extended,
-            file_save,
-            file_compare,
-            file_postponed,
+            bug_persistor,
             limit,
             out,
             order_by_date=(self.mode == FetchMode.subscribed),
         )
+        if bug_persistor is not None:
+            bug_persistor.flush()
 
     async def write_markdown(self, path: Path, extended: bool | None = None) -> None:
         """Append markdown-formatted output to a file."""
@@ -123,34 +113,10 @@ class LaunchpadTriage:
         return json.dumps([t.to_dict(ctx) for t in self.tasks.tasks], indent=4, default=str)
 
 
-def _load_former_bugs(file_compare: Path | None) -> list:
-    if not file_compare:
+def _load_former_bugs(bug_persistor: BugPersistor | None) -> list[str]:
+    if bug_persistor is None:
         return []
-    try:
-        with file_compare.open(encoding="utf-8") as f:
-            return yaml.safe_load(f) or []
-    except FileNotFoundError:
-        return []
-
-
-def _load_postponed_bugs(out: IO[str], file_postponed: Path | None) -> list[str]:
-    postponed = []
-    print("\nPostponed bugs:", file=out)
-    if file_postponed:
-        try:
-            with file_postponed.open(encoding="utf-8") as f:
-                pbugs = yaml.safe_load(f) or []
-            for pbug in pbugs:
-                until = datetime.strptime(pbug[1], "%Y-%m-%d")
-                if until.date() > datetime.now().date():
-                    print(f"{pbug[0]} postponed until {pbug[1]}", file=out)
-                    postponed.append(pbug[0])
-        except FileNotFoundError:
-            pass
-    if not postponed:
-        print("<None>", file=out)
-    print("", file=out)
-    return postponed
+    return bug_persistor.former_bugs("launchpad")
 
 
 async def _print_bugs(  # noqa: PLR0913
@@ -159,21 +125,19 @@ async def _print_bugs(  # noqa: PLR0913
     fmt: OutputFormat,
     open_in_browser: bool,
     extended: bool,
-    file_save: Path | None,
-    file_compare: Path | None,
-    file_postponed: Path | None,
+    bug_persistor: BugPersistor | None,
     limit: int | None,
     out: IO[str],
     order_by_date: bool = False,
     is_sorted: bool = False,
-    former_bugs: list | None = None,
+    former_bugs: list[str] | None = None,
     postponed_bugs: list[str] | None = None,
 ) -> None:
     tasks = lp_tasks.tasks
     if former_bugs is None:
-        former_bugs = _load_former_bugs(file_compare)
+        former_bugs = _load_former_bugs(bug_persistor)
     if postponed_bugs is None and fmt != OutputFormat.MARKDOWN:
-        postponed_bugs = _load_postponed_bugs(out, file_postponed)
+        postponed_bugs = bug_persistor.load_postponed(out) if bug_persistor else []
 
     if is_sorted:
         sorted_tasks = tasks
@@ -198,8 +162,6 @@ async def _print_bugs(  # noqa: PLR0913
             extended,
             None,
             None,
-            None,
-            None,
             out,
             is_sorted=True,
             former_bugs=former_bugs,
@@ -213,8 +175,6 @@ async def _print_bugs(  # noqa: PLR0913
             fmt,
             open_in_browser,
             extended,
-            None,
-            None,
             None,
             None,
             out,
@@ -231,30 +191,33 @@ async def _print_bugs(  # noqa: PLR0913
     further = ""
     for task in sorted_tasks:
         if task.number in reported:
-            arrow = "\N{DOWNWARDS ARROW WITH TIP RIGHTWARDS}"
-            if further and not further.startswith(f" {arrow}"):
-                sep = ","
-            else:
-                sep = f" {arrow}"
-            further += f"{sep} [{task.compose_dup(extended=extended)}]"
+            if fmt != OutputFormat.MARKDOWN:
+                arrow = "\N{DOWNWARDS ARROW WITH TIP RIGHTWARDS}"
+                if further and not further.startswith(f" {arrow}"):
+                    sep = ","
+                else:
+                    sep = f" {arrow}"
+                further += f"{sep} [{task.compose_dup(extended=extended)}]"
             continue
         if further:
             print(further, file=out)
             further = ""
 
-        newbug = bool(file_compare and task.number not in former_bugs)
+        newbug = bool(bug_persistor and bug_persistor.compare_path and task.number not in former_bugs)
 
         match fmt:
             case OutputFormat.MARKDOWN:
                 bug_link = hyperlink(task.url, f"LP #{task.number}", fmt)
                 print(
-                    f"### {bug_link} {task.status} {task.src} - {task.short_title}\n",
+                    f"### {bug_link} {task.status} - {task.src} - {task.short_title}\n",
                     file=out,
                 )
-                print(f"{task.src}: \n", file=out)  # action stub
+                print("\n", file=out)  # action stub
             case OutputFormat.TERMINAL:
-                bugtext = task.get_line(ctx, bugid_len, shortlinks=True, extended=extended, newbug=newbug)
-                if task.number in postponed_bugs:
+                bugtext = task.get_line(
+                    ctx, bugid_len, shortlinks=True, extended=extended, newbug=newbug, fmt=fmt
+                )
+                if postponed_bugs and task.number in postponed_bugs:
                     # Strip ANSI color codes before applying combining strikethrough,
                     # since inserting U+0336 inside escape sequences would corrupt them.
                     bugtext = ANSI_ESCAPE.sub("", bugtext)
@@ -279,22 +242,19 @@ async def _print_bugs(  # noqa: PLR0913
     if further:
         print(further, file=out)
 
-    if file_save:
-        with open(file_save, "w", encoding="utf-8") as f:
-            yaml.dump(reported, stream=f)
-        logging.info("Saved reported bugs in %s", file_save)
+    if bug_persistor is not None and not bug_persistor.no_save:
+        bug_persistor.record("launchpad", reported)
+        # flush() is called by print_section after this returns
 
-    if file_compare:
+    if bug_persistor is not None and bug_persistor.compare_path:
         closed = [x for x in former_bugs if x not in reported]
-        print(f"\nBugs gone compared with {file_compare!r}:", file=out)
+        print(f"\nBugs gone compared with {bug_persistor.compare_path!r}:", file=out)
         await _print_bugs(
             dataclasses.replace(lp_tasks, tasks=_bugs_to_tasks(closed, lp_tasks.lp)),
             ctx,
             fmt,
             False,
             extended,
-            None,
-            None,
             None,
             None,
             out,

@@ -119,6 +119,21 @@ def test_parse_interval_day_name():
     assert end == datetime.date(2026, 4, 12)
 
 
+def test_parse_interval_friday():
+    # Friday triage: show previous weekday (Thursday)
+    ref = datetime.date(2026, 4, 17)  # Friday
+    start, end = parse_interval("friday", relative_to=ref)
+    assert start == end == datetime.date(2026, 4, 16)  # Thursday
+
+
+def test_parse_interval_monday_from_tuesday():
+    # Monday triage from Tuesday context: Fri-Sun of the previous week
+    ref = datetime.date(2026, 4, 14)  # Tuesday
+    start, end = parse_interval("monday", relative_to=ref)
+    assert start == datetime.date(2026, 4, 10)  # Friday
+    assert end == datetime.date(2026, 4, 12)  # Sunday
+
+
 def test_parse_interval_yesterday():
     ref = datetime.date(2026, 4, 16)
     start, end = parse_interval("yesterday", relative_to=ref)

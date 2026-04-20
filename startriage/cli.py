@@ -60,18 +60,80 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Write parallel markdown output to PATH (for Discourse post template)",
     )
 
+    taskfilter_p = argparse.ArgumentParser(add_help=False)
+    taskfilter_p.add_argument(
+        "-i",
+        "--interval",
+        default=None,
+        metavar="DATE[:DATE]",
+        help=(
+            "Date interval to select only tasks changed on that day/inside the range: "
+            "YYYY-MM-DD, YYYY-MM-DD:YYYY-MM-DD, or day name (e.g. monday)"
+        ),
+    )
+    taskfilter_p.add_argument(
+        "--source",
+        default=None,
+        metavar="SOURCE[,SOURCE]",
+        help="Comma-separated sources to include: launchpad/bugs, discourse/forum, github/docs",
+    )
+    taskfilter_p.add_argument("--json", action="store_true", dest="json_output", help="Print JSON output")
+    taskfilter_p.add_argument("--flag-recent", type=int, default=None, metavar="DAYS")
+    taskfilter_p.add_argument("--flag-old", type=int, default=None, metavar="DAYS")
+    taskfilter_p.add_argument(
+        "--no-ignore-list", action="store_true", help="Include normally-ignored packages"
+    )
+
     sp = parser.add_subparsers(required=True, metavar="COMMAND")
 
     # --- list ---
     list_p = sp.add_parser("list", help="List triage items")
     list_sp = list_p.add_subparsers(required=True, metavar="SUBCOMMAND")
 
-    triage_p = list_sp.add_parser("triage", help="Daily triage", parents=[markdown_p])
-    _add_triage_args(triage_p)
+    triage_p = list_sp.add_parser(
+        "triage",
+        help="Daily triage",
+        parents=[markdown_p, taskfilter_p],
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""\
+Terminal output — bug flags column (left to right):
+  *  subscribed by the team
+  +  last activity NOT from the team (reply pending)
+  U  updated recently (within --flag-recent days)
+  O  old / dormant (beyond --flag-old days)
+  N  new bug since last --compare file
+  v  verification-needed-* tag set
+  V  verification-done-* tag set
+""",
+    )
+    triage_p.add_argument("--no-expiration", action="store_true", help="Skip expiring bugs subsection")
+    triage_p.add_argument("--expire-tagged", type=int, metavar="DAYS")
+    triage_p.add_argument("--expire", type=int, metavar="DAYS")
+    triage_p.add_argument(
+        "--update",
+        choices=UpdateFilter,
+        default=None,
+        help="Filter by who last updated bugs (default: theirs)",
+    )
     triage_p.set_defaults(func=_run_triage)
 
-    todo_p = list_sp.add_parser("todo", help="Tagged bug housekeeping", parents=[markdown_p])
-    _add_todo_args(todo_p)
+    todo_p = list_sp.add_parser("todo", help="Tagged bug housekeeping", parents=[markdown_p, taskfilter_p])
+    todo_p.add_argument(
+        "--subscribed",
+        action="store_true",
+        help="Show subscription backlog (directly subscribed, tag excluded)",
+    )
+    todo_p.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        metavar="N",
+        help="With --subscribed: show only top and bottom N bugs",
+    )
+    todo_p.add_argument("--no-save", action="store_true", help="Do not save bug list to file")
+    todo_p.add_argument("-S", "--save", metavar="PATH", help="Override auto save path")
+    todo_p.add_argument("-C", "--compare", metavar="PATH", help="Override auto compare path")
+    todo_p.add_argument("-P", "--postponed", metavar="PATH", help="Override auto postponed path")
     todo_p.set_defaults(func=_run_todo)
 
     # --- forum ---
@@ -95,58 +157,10 @@ def _build_parser() -> argparse.ArgumentParser:
     config_setdefaults_p.add_argument("--default-team", help="Set general.default_team in config")
     config_setdefaults_p.set_defaults(func=_set_config_settings)
 
+    config_show_p = config_sp.add_parser("show", help="Display resolved configuration")
+    config_show_p.set_defaults(func=_show_config)
+
     return parser
-
-
-def _add_triage_args(p: argparse.ArgumentParser) -> None:
-    p.add_argument(
-        "-i",
-        "--interval",
-        default=None,
-        metavar="DATE[:DATE]",
-        help=("Date interval to select only tasks changed on that day/inside the range: "
-              "YYYY-MM-DD, YYYY-MM-DD:YYYY-MM-DD, or day name (e.g. monday)"),
-    )
-    p.add_argument(
-        "--source",
-        default=None,
-        metavar="SOURCE[,SOURCE]",
-        help="Comma-separated sources to include: launchpad/bugs, discourse/forum, github/docs",
-    )
-    p.add_argument("--no-expiration", action="store_true", help="Skip expiring bugs subsection")
-    p.add_argument("--expire-tagged", type=int, metavar="DAYS")
-    p.add_argument("--expire", type=int, metavar="DAYS")
-    p.add_argument("--flag-recent", type=int, metavar="DAYS", default=None)
-    p.add_argument("--flag-old", type=int, metavar="DAYS", default=None)
-    p.add_argument("--no-ignore-list", action="store_true", help="Include normally-ignored packages")
-    p.add_argument(
-        "--update",
-        choices=UpdateFilter,
-        default=None,
-        help="Filter by who last updated bugs (default: theirs)",
-    )
-
-
-def _add_todo_args(p: argparse.ArgumentParser) -> None:
-    p.add_argument(
-        "--subscribed",
-        action="store_true",
-        help="Show subscription backlog (directly subscribed, tag excluded)",
-    )
-    p.add_argument(
-        "--limit",
-        type=int,
-        default=None,
-        metavar="N",
-        help="With --subscribed: show only top and bottom N bugs",
-    )
-    p.add_argument("--no-save", action="store_true", help="Do not save bug list to file")
-    p.add_argument("-S", "--save", metavar="PATH", help="Override auto save path")
-    p.add_argument("-C", "--compare", metavar="PATH", help="Override auto compare path")
-    p.add_argument("-P", "--postponed", metavar="PATH", help="Override auto postponed path")
-    p.add_argument("--json", action="store_true", dest="json_output", help="Print JSON output")
-    p.add_argument("--flag-recent", type=int, default=None, metavar="DAYS")
-    p.add_argument("--flag-old", type=int, default=None, metavar="DAYS")
 
 
 def _resolve_team_name(team_arg: str | None, config) -> str:
@@ -183,16 +197,20 @@ def _make_opts(args: argparse.Namespace) -> TriageRunOptions:
         sources=resolve_sources(args.source),
         open_in_browser=args.open_in_browser,
         shorten_links=not args.fullurls,
+        show_expiration=not getattr(args, "no_expiration", False),
         fmt=OutputFormat.TERMINAL,
         markdown_path=Path(args.markdown) if args.markdown else None,
-        update_filter=args.update,
+        update_filter=getattr(args, "update", None),
         age=age,
         old=old,
     )
 
 
 def main() -> None:
-    asyncio.run(_run())
+    try:
+        asyncio.run(_run())
+    except KeyboardInterrupt:
+        sys.exit(130)
 
 
 async def _run() -> None:
@@ -210,7 +228,12 @@ async def _run_triage(args: argparse.Namespace, config: StarTriageConfig) -> Non
     team = config.get_team(_resolve_team_name(args.team, config))
     if args.no_ignore_list:
         team = team.model_copy(update={"lp_ignore_packages": []})
-    await run_triage(team, config.general, _make_opts(args))
+    general = config.general
+    if args.expire_tagged is not None:
+        general = general.model_copy(update={"lp_expire_tagged": args.expire_tagged})
+    if args.expire is not None:
+        general = general.model_copy(update={"lp_expire": args.expire})
+    await run_triage(team, general, _make_opts(args))
 
 
 async def _run_todo(args: argparse.Namespace, config: StarTriageConfig) -> None:
@@ -254,6 +277,17 @@ async def _run_backlog(args: argparse.Namespace, config: StarTriageConfig) -> No
             OutputFormat.TERMINAL,
             sys.stdout,
         )
+
+
+async def _show_config(args: argparse.Namespace, config: StarTriageConfig) -> None:
+    print("[general]")
+    for field, value in config.general.model_dump().items():
+        print(f"  {field} = {value!r}")
+    for team_name, team in config.team.items():
+        print()
+        print(f"[team.{team_name}]")
+        for field, value in team.model_dump().items():
+            print(f"  {field} = {value!r}")
 
 
 async def _set_config_settings(args: argparse.Namespace, _config: StarTriageConfig) -> None:

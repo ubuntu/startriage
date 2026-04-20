@@ -73,6 +73,7 @@ class DiscourseTriage:
     end: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     site: str | None = None
     had_updates: bool = False
+    triage_category_id: int | None = None
 
     async def print_section(
         self,
@@ -87,20 +88,21 @@ class DiscourseTriage:
         _print = lambda s="": print(s, file=out)  # noqa: E731
 
         _print("\n# Forum\n")
-        pretty_start = self.start.strftime("%Y-%m-%d (%A)")
-        pretty_end = self.end.strftime("%Y-%m-%d (%A)")
-        date_info = (
-            f"on {pretty_start}"
-            if pretty_start == pretty_end
-            else f"between {pretty_start} and {pretty_end} inclusive"
-        )
         site_info = f" on {self.site}" if self.site else ""
-        logging.info("Showing comments%s, updated %s", site_info, date_info)
+        logging.info("Showing forum comments%s", site_info)
 
         for result in self.results:
             logging.info("Comments belonging to the %s category:", result.category_name)
             _print_category_comments(
-                result.category, self.start, self.end, open_in_browser, shorten_links, result.site, fmt, out
+                result.category,
+                self.start,
+                self.end,
+                open_in_browser,
+                shorten_links,
+                result.site,
+                fmt,
+                out,
+                triage_category_id=self.triage_category_id,
             )
 
     async def write_markdown(self, path: str, open_in_browser: bool = False) -> None:
@@ -154,7 +156,7 @@ def _print_topic_header(
     site: str | None,
     fmt: OutputFormat,
     out,
-    topic_name_length: int = 25,
+    topic_name_length: int = 50,
 ) -> None:
     topic_url = f.get_topic_url(topic, site)
     status_str = {PostStatus.UPDATED: "*", PostStatus.NEW: "+"}.get(status, "")
@@ -223,6 +225,7 @@ def _print_category_comments(
     site: str | None,
     fmt: OutputFormat,
     out,
+    triage_category_id: int | None = None,
 ) -> None:
     initial_open = True
     for topic in category.get_topics():
@@ -230,6 +233,13 @@ def _print_category_comments(
         meta_list = [
             _create_post_meta(p, start, end, f.get_post_url(topic, i, site)) for i, p in enumerate(posts)
         ]
+
+        # Topics in the triage category: ignore main-post updates, show replies only.
+        is_triage = triage_category_id is not None and topic.get_category_id() == triage_category_id
+        if is_triage:
+            for m in meta_list:
+                if m.post.is_main_post_for_topic():
+                    m.status = PostStatus.UNCHANGED
 
         topic_relevant = any(m.status != PostStatus.UNCHANGED for m in meta_list)
         if not topic_relevant:
@@ -308,12 +318,14 @@ async def find(
     end: datetime,
     site: str | None = None,
     tag: str | None = None,
+    triage_topic_id: int | None = None,
+    triage_category_id: int | None = None,
 ) -> DiscourseTriage:
     """Fetch all Discourse data for the given categories and date range.
 
     Prints output incrementally as each category is processed.
     """
-    triage = DiscourseTriage(start=start, end=end, site=site)
+    triage = DiscourseTriage(start=start, end=end, site=site, triage_category_id=triage_category_id)
 
     for category_name in [c.strip() for c in category_names.split(",")]:
         category = await f.get_category_by_name(session, category_name, site)

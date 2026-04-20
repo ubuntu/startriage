@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
@@ -10,13 +11,16 @@ from pathlib import Path
 
 import aiohttp
 
-from startriage.config import GeneralConfig, TeamConfig
-from startriage.enums import FetchMode, UpdateFilter
-from startriage.output import OutputFormat
-from startriage.sources.discourse.triage import find as discourse_find
-from startriage.sources.github.finder import get_github_token
-from startriage.sources.github.triage import find as github_find
-from startriage.sources.launchpad.triage import find as launchpad_find
+from .config import GeneralConfig, TeamConfig
+from .dates import reverse_auto_date_range
+from .enums import FetchMode, UpdateFilter
+from .output import OutputFormat
+from .savebugs import get_bug_persistor
+from .sources.discourse.triage import find as discourse_find
+from .sources.github.finder import get_github_token
+from .sources.github.triage import find as github_find
+from .sources.launchpad.triage import find as launchpad_find
+from .spinner import Spinner
 
 SOURCES_ALL = ("launchpad", "discourse", "github")
 SOURCE_ALIASES = {
@@ -94,6 +98,7 @@ async def run_triage(
                 discourse_start,
                 discourse_end_exclusive,
                 site=general_config.discourse_site,
+                triage_category_id=team_config.discourse_triage_category_id,
             )
 
     async def _fetch_github():
@@ -115,23 +120,46 @@ async def run_triage(
     if "github" in opts.sources:
         fetch_tasks["github"] = asyncio.create_task(_fetch_github())
 
+    # Print date range once before any section output
+    if opts.start and opts.end:
+        pretty_start = opts.start.strftime("%Y-%m-%d (%A)")
+        pretty_end = opts.end.strftime("%Y-%m-%d (%A)")
+        if opts.start == opts.end:
+            print(f"Updated on {pretty_start}")
+        else:
+            print(f"Updated between {pretty_start} and {pretty_end} inclusive")
+        label = reverse_auto_date_range(opts.start, opts.end)
+        if label:
+            print(f"({label})")
+        print()
+
+    # Track which sources are still being fetched (shared mutable state, safe in single-threaded asyncio)
+    pending = set(fetch_tasks.keys())
+
     # Print sections in canonical order as each completes
     async def _await_and_print(source: str, task: asyncio.Task):
         result = await task
-        match source:
-            case "launchpad":
-                await result.print_section(fmt=opts.fmt, open_in_browser=opts.open_in_browser)
-            case "github":
-                await result.print_section(fmt=opts.fmt, open_in_browser=opts.open_in_browser)
-            case "discourse":
-                await result.print_section(
-                    fmt=opts.fmt, open_in_browser=opts.open_in_browser, shorten_links=opts.shorten_links
-                )
-            case _:
-                raise RuntimeError(f"Unhandled source {source!r}")
+        spinner.done(source)
+        spinner.clear()
+        spinner.suspend()  # prevent spinner redraws while section output is in progress
+        try:
+            match source:
+                case "launchpad":
+                    await result.print_section(fmt=opts.fmt, open_in_browser=opts.open_in_browser)
+                case "github":
+                    await result.print_section(fmt=opts.fmt, open_in_browser=opts.open_in_browser)
+                case "discourse":
+                    await result.print_section(
+                        fmt=opts.fmt, open_in_browser=opts.open_in_browser, shorten_links=opts.shorten_links
+                    )
+                case _:
+                    raise RuntimeError(f"Unhandled source {source!r}")
+        finally:
+            spinner.resume()
         return source, result
 
-    results = await asyncio.gather(*[_await_and_print(source, t) for source, t in fetch_tasks.items()])
+    async with Spinner(pending) as spinner:
+        results = await asyncio.gather(*[_await_and_print(source, t) for source, t in fetch_tasks.items()])
 
     # create markdown template
     if opts.markdown_path:
@@ -159,52 +187,81 @@ async def run_todo(
     subscribed: bool = False,
     json_output: bool = False,
 ) -> None:
-    """Todo / housekeeping triage: tag-filtered bugs, no date filter."""
+    """Todo / housekeeping triage: tag-filtered bugs, no date filter.
 
+    All sources in *opts.sources* are optional — pass a subset to fetch only
+    that source.  *subscribed* only controls LP fetch mode (subscription list
+    vs. todo tag); GitHub is filtered by label regardless.
+    """
     mode = FetchMode.subscribed if subscribed else FetchMode.todo
-    lp_triage = await launchpad_find(team_config, general_config, None, None, mode=mode)
 
-    if json_output:
-        print(lp_triage.to_json())
-        return
+    # GitHub label: explicit config field, fall back to lp_todo_tag in todo mode,
+    # or no filter in subscribed mode
+    gh_label: str | None = None if subscribed else (team_config.github_todo_label or team_config.lp_todo_tag)
 
-    # Auto-derive savebugs paths
-    savebugs_dir = general_config.savebugs_dir
-    if not no_save:
-        auto_save = savebugs_dir / f"todo-{datetime.now().strftime('%Y-%m-%d')}.yaml"
-        save_path = filename_save or auto_save
+    token = get_github_token()
+    pending: set[str] = set()
+    lp_task: asyncio.Task | None = None
+    gh_task: asyncio.Task | None = None
 
-        if filename_compare is None:
-            existing = sorted(savebugs_dir.glob("todo-*.yaml"))
-            compare_path = existing[-1] if existing else None
-        else:
-            compare_path = filename_compare
+    if "launchpad" in opts.sources:
+        pending.add("launchpad")
+        lp_task = asyncio.create_task(launchpad_find(team_config, general_config, None, None, mode=mode))
+    if "github" in opts.sources:
+        pending.add("github")
+        gh_task = asyncio.create_task(
+            github_find(
+                team_config.github_org,
+                team_config.github_repos,
+                None,
+                None,
+                token=token,
+                label=gh_label,
+            )
+        )
 
-        auto_postponed = savebugs_dir / "postponed.yaml"
-        postponed_path = filename_postponed or (auto_postponed if auto_postponed.exists() else None)
-    else:
-        save_path = compare_path = postponed_path = None
-
-    if save_path and not no_save:
-        logging.info("Will save bug list to: %s", save_path)
-
-    await lp_triage.print_section(
-        fmt=opts.fmt,
-        open_in_browser=opts.open_in_browser,
-        file_save=save_path if not no_save else None,
-        file_compare=compare_path,
-        file_postponed=postponed_path,
-        limit=limit,
+    handler = get_bug_persistor(
+        general_config.savebugs_dir,
+        filename_save=filename_save,
+        filename_compare=filename_compare,
+        filename_postponed=filename_postponed,
+        no_save=no_save,
     )
 
-    # GitHub: tagged issues in configured repos
-    if not subscribed and "github" in opts.sources:
-        token = get_github_token()
-        gh_triage = await github_find(
-            team_config.github_org,
-            team_config.github_repos,
-            None,
-            None,
-            token=token,
+    async with Spinner(pending) as spinner:
+        lp_triage = None
+        if lp_task is not None:
+            lp_triage = await lp_task
+            spinner.done("launchpad")
+            spinner.clear()
+
+        gh_triage = None
+        if gh_task is not None:
+            gh_triage = await gh_task
+            spinner.done("github")
+            spinner.clear()
+
+    if json_output:
+        result: dict = {}
+        if lp_triage is not None:
+            result["launchpad"] = json.loads(lp_triage.to_json())
+        if gh_triage is not None:
+            result["github"] = gh_triage.to_dict()
+        print(json.dumps(result, indent=4, default=str))
+        return
+
+    if lp_triage is not None:
+        await lp_triage.print_section(
+            fmt=opts.fmt,
+            open_in_browser=opts.open_in_browser,
+            extended=True,
+            bug_persistor=handler,
+            limit=limit,
         )
-        await gh_triage.print_section(fmt=opts.fmt)
+
+    if gh_triage is not None:
+        await gh_triage.print_todo_section(
+            fmt=opts.fmt,
+            open_in_browser=opts.open_in_browser,
+            bug_persistor=handler,
+        )

@@ -69,6 +69,7 @@ class DiscourseTopic:
         self._id = topic_json.get("id")
         self._name = topic_json.get("title")
         self._slug = topic_json.get("slug")
+        self._category_id: int | None = topic_json.get("category_id")
         self._pinned = topic_json.get("pinned", False)
         self._tags: list[str] = [str(t) for t in topic_json.get("tags", [])]
         self._posts: list[DiscoursePost] = []
@@ -93,6 +94,9 @@ class DiscourseTopic:
 
     def get_id(self) -> int | None:
         return self._id
+
+    def get_category_id(self) -> int | None:
+        return self._category_id
 
     def get_name(self) -> str | None:
         return self._name
