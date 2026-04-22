@@ -4,13 +4,39 @@ from __future__ import annotations
 
 import os
 import sys
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from enum import StrEnum
 from functools import lru_cache
+from pathlib import Path
+from typing import IO
 
 
 class OutputFormat(StrEnum):
     TERMINAL = "terminal"
     MARKDOWN = "markdown"
+    JSON = "json"
+
+
+@dataclass
+class OutputConfig:
+    fmt: OutputFormat
+    out: IO[str]
+    open_in_browser: bool = False
+    terminal_links: bool = True
+
+
+class TriageOutput(ABC):
+    @abstractmethod
+    async def print_section(
+        self,
+        cfg: OutputConfig,
+    ) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    async def write_markdown(self, path: Path) -> None:
+        raise NotImplementedError
 
 
 @lru_cache(maxsize=256)
@@ -30,9 +56,13 @@ def hyperlink(url: str, text: str, fmt: OutputFormat = OutputFormat.TERMINAL) ->
                 return f"{osc8};;{url}{st}{text}{osc8};;{st}"
             return text
         case _:
-            raise ValueError(f"Unsupported output format: {fmt}")
+            raise NotImplementedError
 
 
-def print_section_header(title: str, level: int = 1) -> None:
-    """Print a Markdown-style section header."""
-    print(f"\n{'#' * level} {title}\n")
+def truncate_string(text: str, length: int = 20, pad: bool = False) -> str:
+    s = str(text)
+    if len(s) > length:
+        return s[: length - 1] + "\u2026"  # triple dot ellipsis
+    if pad:
+        return s.ljust(length)
+    return s

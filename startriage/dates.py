@@ -173,3 +173,33 @@ def parse_interval(arg: str | None, relative_to: date | None = None) -> tuple[da
     # Single date or relative keyword → single-day range
     d = _parse_single_date(arg, relative_to)
     return d, d
+
+
+def compact_date_range(start: date, end: date) -> str:
+    """Return a compact date-range string.
+
+      single day               -> 2026-02-12
+      same year+month (list)   -> 2026-02-{12,13,14}
+      cross-month same year    -> 2026-[03-31,04-02]  (interval)
+      cross-year (interval)    -> [2025-12-31,2026-01-01]
+    """
+    if start == end:
+        return start.strftime("%Y-%m-%d")
+
+    # Same year and month: enumerate every day as a list
+    if start.year == end.year and start.month == end.month:
+        parts: list[str] = []
+        cur = start
+        while cur <= end:
+            parts.append(cur.strftime("%d"))
+            cur += timedelta(days=1)
+        return f"{start.strftime('%Y-%m')}-{{{','.join(parts)}}}"
+
+    # Cross-month, same year: interval
+    if start.year == end.year:
+        s = start.strftime("%m-%d")
+        e = end.strftime("%m-%d")
+        return f"{start.year}-[{s},{e}]"
+
+    # Cross-year: interval
+    return f"[{start.strftime('%Y-%m-%d')},{end.strftime('%Y-%m-%d')}]"

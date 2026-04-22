@@ -6,7 +6,7 @@ import tomllib
 from importlib.resources import files
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 from startriage.enums import UpdateFilter
 
@@ -16,11 +16,10 @@ DEFAULT_USER_CONFIG = Path("~/.config/startriage.toml")
 class GeneralConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    discourse_site: str = "https://discourse.ubuntu.com"
     lp_expire_tagged: int = 60
     lp_expire: int = 180
     lp_extended: bool = False
-    lp_update_filter: UpdateFilter = UpdateFilter.theirs
+    lp_triage_updates: UpdateFilter = UpdateFilter.theirs
     savebugs_dir: Path | None = None
     default_team: str | None = None
 
@@ -31,6 +30,20 @@ class GeneralConfig(BaseModel):
         return self
 
 
+class GithubRepoConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str  # org/reponame
+    todo_labels: list[str] | None = None
+
+    @classmethod
+    def from_str_or_dict(cls, v: object) -> GithubRepoConfig:
+        """Allow a plain string "org/repo" as shorthand for {name = "org/repo"}."""
+        if isinstance(v, str):
+            return cls(name=v)
+        return cls.model_validate(v)
+
+
 class TeamConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -39,9 +52,16 @@ class TeamConfig(BaseModel):
     lp_ignore_packages: list[str] = []
     discourse_categories: str
     discourse_triage_category_id: int | None = None
-    github_org: str
-    github_repos: list[str]
-    github_todo_label: str | None = None
+    github_todo_label: str | None = None  # default todo label that don't specify their own
+    github_repos: list[GithubRepoConfig] = []
+
+    @field_validator("github_repos", mode="before")
+    @classmethod
+    def coerce_github_repos(cls, v: object) -> list[GithubRepoConfig]:
+        """Accept both plain strings and dicts/GithubRepoConfig objects."""
+        if not isinstance(v, list):
+            raise ValueError("github_repos must be a list")
+        return [GithubRepoConfig.from_str_or_dict(item) for item in v]
 
 
 class StarTriageConfig(BaseModel):
@@ -104,3 +124,24 @@ def load_config(user_config_path: Path | None = None) -> StarTriageConfig:
     }
 
     return StarTriageConfig.model_validate({"general": merged_general, "team": merged_teams})
+
+
+def resolve_team_name(team_arg: str | None, config: StarTriageConfig) -> str:
+    """Determine which team to use.
+
+    Priority:
+    1. Explicit -t/--team argument
+    2. general.default_team in config
+    3. If exactly one team is configured, use it automatically
+    """
+    if team_arg:
+        return team_arg
+    default = config.general.default_team
+    if default:
+        return default
+    teams = list(config.team.keys())
+    if len(teams) == 1:
+        return teams[0]
+
+    available = ", ".join(sorted(teams)) or "(none)"
+    raise KeyError(f"Multiple teams configured; use -t to pick one: {available}")

@@ -5,18 +5,17 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
-import sys
-import time
 import webbrowser
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+from pathlib import Path
 
 import aiohttp
 
-from startriage.output import OutputFormat, hyperlink
+from startriage.output import OutputConfig, OutputFormat, TriageOutput, hyperlink
 
-from . import finder as f
+from .finder import DiscourseFinder
 from .models import DiscourseCategory, DiscoursePost, DiscourseTopic
 
 
@@ -57,6 +56,23 @@ def _set_relevant(meta: PostWithMetadata) -> bool:
     return is_relevant
 
 
+def _topic_is_relevant(
+    topic: DiscourseTopic, start: datetime, end: datetime, triage_category_id: int | None
+) -> bool:
+    """Return True if *topic* has at least one new/updated post in [start, end)."""
+    posts = topic.get_posts()
+    if not posts:
+        return False
+    meta_list = [_create_post_meta(p, start, end, "") for p in posts]
+    # ignore the team's triage posts, but consider replies to them.
+    is_triage = triage_category_id is not None and topic.get_category_id() == triage_category_id
+    if is_triage:
+        for m in meta_list:
+            if m.post.is_main_post_for_topic():
+                m.status = PostStatus.UNCHANGED
+    return any(m.status != PostStatus.UNCHANGED for m in meta_list)
+
+
 @dataclass
 class CategoryResult:
     category_name: str
@@ -65,9 +81,10 @@ class CategoryResult:
 
 
 @dataclass
-class DiscourseTriage:
+class DiscourseTriage(TriageOutput):
     """Holds all fetched Discourse results for one triage run."""
 
+    finder: DiscourseFinder  # api access
     results: list[CategoryResult] = field(default_factory=list)
     start: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     end: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
@@ -75,240 +92,242 @@ class DiscourseTriage:
     had_updates: bool = False
     triage_category_id: int | None = None
 
+    def _count_relevant_topics(self) -> int:
+        """Count topics across all categories that have new/updated posts."""
+        return sum(
+            1
+            for result in self.results
+            for topic in result.category.get_topics()
+            if _topic_is_relevant(topic, self.start, self.end, self.triage_category_id)
+        )
+
     async def print_section(
         self,
-        fmt: OutputFormat = OutputFormat.TERMINAL,
-        open_in_browser: bool = False,
-        shorten_links: bool = True,
-        out=None,
+        cfg: OutputConfig,
     ) -> None:
         """Print the # Forum section to stdout (and optionally to a markdown file)."""
-        if out is None:
-            out = sys.stdout
-        _print = lambda s="": print(s, file=out)  # noqa: E731
 
-        _print("\n# Forum\n")
+        topic_count = self._count_relevant_topics()
         site_info = f" on {self.site}" if self.site else ""
         logging.info("Showing forum comments%s", site_info)
 
+        match cfg.fmt:
+            case OutputFormat.MARKDOWN:
+                print("## Discourse", file=cfg.out)
+            case OutputFormat.TERMINAL:
+                print(f"## Discourse ({topic_count} topic{'s' if topic_count != 1 else ''})", file=cfg.out)
+            case _:
+                raise NotImplementedError
+
+        if topic_count == 0:
+            match cfg.fmt:
+                case OutputFormat.MARKDOWN:
+                    print("no activity", file=cfg.out)
+                case OutputFormat.TERMINAL:
+                    ...
+                case _:
+                    raise NotImplementedError
+            return
+
         for result in self.results:
             logging.info("Comments belonging to the %s category:", result.category_name)
-            _print_category_comments(
+            await self._print_category_comments(
                 result.category,
                 self.start,
                 self.end,
-                open_in_browser,
-                shorten_links,
-                result.site,
-                fmt,
-                out,
+                cfg,
                 triage_category_id=self.triage_category_id,
             )
 
-    async def write_markdown(self, path: str, open_in_browser: bool = False) -> None:
+    async def write_markdown(self, path: Path) -> None:
         """Write markdown-formatted output to a file."""
 
         buf = io.StringIO()
         await self.print_section(
-            fmt=OutputFormat.MARKDOWN, open_in_browser=False, shorten_links=False, out=buf
+            OutputConfig(fmt=OutputFormat.MARKDOWN, out=buf, open_in_browser=False, terminal_links=False)
         )
-        with open(path, "a", encoding="utf-8") as fh:
+
+        with path.open("a", encoding="utf-8") as fh:
             fh.write(buf.getvalue())
 
+    @staticmethod
+    def _content_preview(post: DiscoursePost, max_len: int = 50) -> str:
+        """Return the first *max_len* characters of the post body, cleaned up."""
+        raw = (post.get_data() or "").strip()
+        # Collapse whitespace / newlines so the preview fits on one line
+        preview = " ".join(raw.split())
+        if len(preview) > max_len:
+            preview = preview[: max_len - 1] + "…"
+        return preview or "(no content)"
 
-def _print_single_comment(
-    post: DiscoursePost,
-    status: PostStatus,
-    date_updated: datetime | None,
-    post_url: str,
-    shorten_links: bool,
-    fmt: OutputFormat,
-    out,
-) -> None:
-    status_str = {PostStatus.UPDATED: "*", PostStatus.NEW: "+"}.get(status, "")
-    date_str = f", {date_updated.strftime('%Y-%m-%d')}" if date_updated else ""
+    def _print_single_comment(
+        self,
+        post: DiscoursePost,
+        status: PostStatus,
+        date_updated: datetime | None,
+        post_url: str,
+        cfg: OutputConfig,
+    ) -> None:
+        status_str = {PostStatus.UPDATED: "*", PostStatus.NEW: "+"}.get(status, "")
+        date_str = f" {date_updated.strftime('%Y-%m-%d')}" if date_updated else ""
+        preview = self._content_preview(post)
 
-    if fmt == OutputFormat.MARKDOWN:
-        link = hyperlink(post_url, str(post.get_id()), fmt)
-        author = f.author_str(post)
-        print(
-            f"{status_str}{link} [{author}{date_str}]",
-            file=out,
-        )
-    else:
-        if shorten_links:
-            id_str = hyperlink(post_url, str(post.get_id()), fmt)
-            url_str = ""
-        else:
-            id_str = str(post.get_id())
-            url_str = f"({post_url})"
-        author = f.author_str(post)
-        print(f"{status_str}{id_str} [{author}{date_str}] {url_str}", file=out)
-
-
-def _print_topic_header(
-    topic: DiscourseTopic,
-    status: PostStatus,
-    date_updated: datetime | None,
-    author: str | None,
-    editor: str | None,
-    shorten_links: bool,
-    site: str | None,
-    fmt: OutputFormat,
-    out,
-    topic_name_length: int = 50,
-) -> None:
-    topic_url = f.get_topic_url(topic, site)
-    status_str = {PostStatus.UPDATED: "*", PostStatus.NEW: "+"}.get(status, "")
-    if not status_str:
-        topic_name_length += 1
-
-    name = topic.get_name() or ""
-    if len(name) > topic_name_length:
-        name = name[: topic_name_length - 1] + "…"
-    else:
-        name = name.ljust(topic_name_length)
-
-    if fmt == OutputFormat.MARKDOWN:
-        link = hyperlink(topic_url, name.strip(), fmt)
-    elif shorten_links:
-        link = hyperlink(topic_url, name, fmt)
-    else:
-        link = name
-
-    date_str = f", {date_updated.strftime('%Y-%m-%d')}" if date_updated else ""
-    url_str = "" if (fmt == OutputFormat.MARKDOWN or shorten_links) else f"({topic_url})"
-    display_author = editor if editor else author
-    print(f"{status_str}{link} [{display_author}{date_str}] {url_str}", file=out)
-
-
-def _print_comment_chain(
-    meta: PostWithMetadata, shorten_links: bool, fmt: OutputFormat, out, chain: list[str]
-) -> None:
-    if not meta.contains_relevant_posts:
-        return
-
-    if chain:
-        indent = chain[0] + "".join("  " + c for c in chain[1:])
-        print(indent, end="─ ", file=out)
-
-    _print_single_comment(meta.post, meta.status, meta.update_date, meta.url, shorten_links, fmt, out)
-
-    relevant_replies = [r for r in meta.replies if r.contains_relevant_posts]
-    if relevant_replies:
-        if chain and chain[-1] == "├":
-            chain[-1] = "│"
-        elif chain and chain[-1] == "└":
-            chain[-1] = " "
-        chain.append("├")
-        for reply in relevant_replies[:-1]:
-            _print_comment_chain(reply, shorten_links, fmt, out, chain)
-        chain[-1] = "└"
-        _print_comment_chain(relevant_replies[-1], shorten_links, fmt, out, chain)
-        chain.pop()
-
-
-async def _get_editor(
-    session: aiohttp.ClientSession | None, post: DiscoursePost, site: str | None
-) -> str | None:
-    if session is None:
-        return None
-    return await f.get_editor_name(session, post, site)
-
-
-def _print_category_comments(
-    category: DiscourseCategory,
-    start: datetime,
-    end: datetime,
-    open_in_browser: bool,
-    shorten_links: bool,
-    site: str | None,
-    fmt: OutputFormat,
-    out,
-    triage_category_id: int | None = None,
-) -> None:
-    initial_open = True
-    for topic in category.get_topics():
-        posts = topic.get_posts()
-        meta_list = [
-            _create_post_meta(p, start, end, f.get_post_url(topic, i, site)) for i, p in enumerate(posts)
-        ]
-
-        # Topics in the triage category: ignore main-post updates, show replies only.
-        is_triage = triage_category_id is not None and topic.get_category_id() == triage_category_id
-        if is_triage:
-            for m in meta_list:
-                if m.post.is_main_post_for_topic():
-                    m.status = PostStatus.UNCHANGED
-
-        topic_relevant = any(m.status != PostStatus.UNCHANGED for m in meta_list)
-        if not topic_relevant:
-            continue
-
-        # Build reply tree
-        final_list: list[PostWithMetadata] = []
-        for item in meta_list:
-            replied_to = next(
-                (m for m in meta_list if m.post.get_post_number() == item.post.get_reply_to_number()),
-                None,
-            )
-            if replied_to is None or replied_to.post.is_main_post_for_topic():
-                final_list.append(item)
-            if replied_to is not None:
-                replied_to.add_reply(item)
-
-            if item.status != PostStatus.UNCHANGED and open_in_browser:
-                if initial_open:
-                    initial_open = False
-                    webbrowser.open(item.url)
-                    time.sleep(5)
+        match cfg.fmt:
+            case OutputFormat.MARKDOWN:
+                link = hyperlink(post_url, str(post.get_id()), cfg.fmt)
+                print(f"{status_str}{link} [{date_str.strip()}] {preview}", file=cfg.out)
+            case OutputFormat.TERMINAL:
+                if cfg.terminal_links:
+                    id_str = hyperlink(post_url, str(post.get_id()), cfg.fmt)
+                    url_str = ""
                 else:
-                    webbrowser.open_new_tab(item.url)
-                    time.sleep(1.2)
+                    id_str = str(post.get_id())
+                    url_str = f" ({post_url})"
+                print(f"{status_str}{id_str}[{date_str.strip()}] {preview}{url_str}", file=cfg.out)
+            case _:
+                raise NotImplementedError
 
-        for item in meta_list:
-            _set_relevant(item)
+    def _print_topic_header(
+        self,
+        topic: DiscourseTopic,
+        status: PostStatus,
+        date_updated: datetime | None,
+        cfg: OutputConfig,
+        topic_name_length: int = 50,
+    ) -> None:
+        topic_url = self.finder.get_topic_url(topic)
+        status_str = {PostStatus.UPDATED: "*", PostStatus.NEW: "+"}.get(status, "")
+        if not status_str:
+            topic_name_length += 1
 
-        # Find main post
-        main_meta = next((m for m in final_list if m.post.is_main_post_for_topic()), None)
-
-        # In markdown mode, the tree goes inside a fenced code block to preserve indentation
-        if fmt == OutputFormat.MARKDOWN:
-            tree_buf = io.StringIO()
-            tree_out = tree_buf
+        name = topic.get_name() or ""
+        if len(name) > topic_name_length:
+            name = name[: topic_name_length - 1] + "…"
         else:
-            tree_out = out
+            name = name.ljust(topic_name_length)
 
-        if main_meta:
-            author = f.author_str(main_meta.post)
-            editor = None  # editor lookup requires async; done in find()
-            _print_topic_header(
-                topic,
-                main_meta.status,
-                main_meta.update_date,
-                author,
-                editor,
-                shorten_links,
-                site,
-                fmt,
-                tree_out,
-            )
-            final_list = [m for m in final_list if m != main_meta and m.contains_relevant_posts]
-        else:
-            _print_topic_header(
-                topic, PostStatus.UNCHANGED, None, None, None, shorten_links, site, fmt, tree_out
-            )
+        match cfg.fmt:
+            case OutputFormat.MARKDOWN:
+                link = hyperlink(topic_url, name.strip(), cfg.fmt)
+                date_str = f" {date_updated.strftime('%Y-%m-%d')}" if date_updated else ""
+                print(f"### {status_str}{link}{date_str}", file=cfg.out)
 
-        for item in final_list[:-1]:
-            _print_comment_chain(item, shorten_links, fmt, tree_out, ["├"])
-        if final_list:
-            _print_comment_chain(final_list[-1], shorten_links, fmt, tree_out, ["└"])
+            case OutputFormat.TERMINAL:
+                if cfg.terminal_links:
+                    link = hyperlink(topic_url, name, cfg.fmt)
+                else:
+                    link = name
 
-        if fmt == OutputFormat.MARKDOWN:
-            tree_text = tree_buf.getvalue().rstrip("\n")
-            if tree_text:
-                print(f"```\n{tree_text}\n```", file=out)
-            print(file=out)  # action stub blank line
+                date_str = f" {date_updated.strftime('%Y-%m-%d')}" if date_updated else ""
+                url_str = "" if cfg.terminal_links else f" ({topic_url})"
+                print(f"{status_str}{link}[{date_str.strip()}]{url_str}", file=cfg.out)
+
+            case _:
+                raise NotImplementedError
+
+    def _print_comment_chain(self, meta: PostWithMetadata, cfg: OutputConfig, chain: list[str]) -> None:
+        if not meta.contains_relevant_posts:
+            return
+
+        if chain:
+            indent = chain[0] + "".join("  " + c for c in chain[1:])
+            print(indent, end="─ ", file=cfg.out)
+
+        self._print_single_comment(meta.post, meta.status, meta.update_date, meta.url, cfg)
+
+        relevant_replies = [r for r in meta.replies if r.contains_relevant_posts]
+        if relevant_replies:
+            if chain and chain[-1] == "├":
+                chain[-1] = "│"
+            elif chain and chain[-1] == "└":
+                chain[-1] = " "
+            chain.append("├")
+            for reply in relevant_replies[:-1]:
+                self._print_comment_chain(reply, cfg, chain)
+            chain[-1] = "└"
+            self._print_comment_chain(relevant_replies[-1], cfg, chain)
+            chain.pop()
+
+    async def _get_editor(self, session: aiohttp.ClientSession | None, post: DiscoursePost) -> str | None:
+        if session is None:
+            return None
+        return await self.finder.get_editor_name(session, post)
+
+    async def _print_category_comments(
+        self,
+        category: DiscourseCategory,
+        start: datetime,
+        end: datetime,
+        cfg: OutputConfig,
+        triage_category_id: int | None = None,
+    ) -> None:
+
+        relevant_topics = []
+        for topic in category.get_topics():
+            posts_raw = topic.get_posts()
+            posts = [
+                _create_post_meta(p, start, end, self.finder.get_post_url(topic, i))
+                for i, p in enumerate(posts_raw)
+            ]
+
+            # Topics in the triage category: ignore main-post updates, show replies only.
+            is_triage = triage_category_id is not None and topic.get_category_id() == triage_category_id
+            if is_triage:
+                for m in posts:
+                    if m.post.is_main_post_for_topic():
+                        m.status = PostStatus.UNCHANGED
+
+            topic_relevant = any(m.status != PostStatus.UNCHANGED for m in posts)
+            if not topic_relevant:
+                continue
+            relevant_topics.append(posts)
+
+            # Build reply tree
+            final_list: list[PostWithMetadata] = []
+            for post in posts:
+                replied_to = next(
+                    (m for m in posts if m.post.get_post_number() == post.post.get_reply_to_number()),
+                    None,
+                )
+                if replied_to is None or replied_to.post.is_main_post_for_topic():
+                    final_list.append(post)
+                if replied_to is not None:
+                    replied_to.add_reply(post)
+
+            for post in posts:
+                _set_relevant(post)
+
+            # Find main post
+            main_post = next((m for m in final_list if m.post.is_main_post_for_topic()), None)
+
+            if main_post:
+                self._print_topic_header(
+                    topic,
+                    main_post.status,
+                    main_post.update_date,
+                    cfg,
+                )
+                final_list = [m for m in final_list if m != main_post and m.contains_relevant_posts]
+            else:
+                self._print_topic_header(topic, PostStatus.UNCHANGED, None, cfg)
+
+            for post in final_list[:-1]:
+                self._print_comment_chain(post, cfg, ["├"])
+            if final_list:
+                self._print_comment_chain(final_list[-1], cfg, ["└"])
+
+            print(file=cfg.out)  # blank line after each topic (spacing in terminal / notes in markdown)
+
+        if cfg.open_in_browser:
+            # only open the latest updated post in each topic
+            for posts in relevant_topics:
+                for post in reversed(posts):
+                    if post.status == PostStatus.UNCHANGED:
+                        continue
+
+                    webbrowser.open_new_tab(post.url)
+                    await asyncio.sleep(0.2)
+                    break
 
 
 async def find(
@@ -318,26 +337,26 @@ async def find(
     end: datetime,
     site: str | None = None,
     tag: str | None = None,
-    triage_topic_id: int | None = None,
     triage_category_id: int | None = None,
 ) -> DiscourseTriage:
-    """Fetch all Discourse data for the given categories and date range.
+    """Fetch all Discourse data for the given categories and date range."""
+    finder = DiscourseFinder(site)
 
-    Prints output incrementally as each category is processed.
-    """
-    triage = DiscourseTriage(start=start, end=end, site=site, triage_category_id=triage_category_id)
+    triage = DiscourseTriage(
+        finder=finder, start=start, end=end, site=site, triage_category_id=triage_category_id
+    )
 
     for category_name in [c.strip() for c in category_names.split(",")]:
-        category = await f.get_category_by_name(session, category_name, site)
+        category = await finder.get_category_by_name(session, category_name)
         if category is None:
             logging.warning("Unable to find category: %s", category_name)
             continue
 
-        await f.add_topics_to_category(session, category, start, site)
+        await finder.add_topics_to_category(session, category, start, site)
 
         # Fetch all topic posts concurrently
         topics = [t for t in category.get_topics() if tag is None or t.has_tag(tag)]
-        await asyncio.gather(*[f.add_posts_to_topic(session, t, site) for t in topics])
+        await asyncio.gather(*[finder.add_posts_to_topic(session, t) for t in topics])
 
         triage.results.append(CategoryResult(category_name, category, site))
 

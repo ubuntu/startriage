@@ -6,7 +6,7 @@ import datetime
 
 import pytest
 
-from startriage.dates import auto_date_range, parse_interval, reverse_auto_date_range
+from startriage.dates import auto_date_range, compact_date_range, parse_interval, reverse_auto_date_range
 
 
 def _d(s: str) -> datetime.date:
@@ -154,3 +154,26 @@ def test_parse_interval_reversed_range_raises():
 def test_parse_interval_bad_value_raises():
     with pytest.raises(ValueError):
         parse_interval("notadate")
+
+
+# --- compact_date_range ---
+
+
+@pytest.mark.parametrize(
+    "start,end,expected",
+    [
+        # single day
+        ("2026-02-12", "2026-02-12", "2026-02-12"),
+        # same month: all days listed as a set
+        ("2026-02-12", "2026-02-14", "2026-02-{12,13,14}"),
+        ("2026-04-18", "2026-04-20", "2026-04-{18,19,20}"),
+        # cross-month, same year: interval only (start and end)
+        ("2026-03-31", "2026-04-02", "2026-[03-31,04-02]"),
+        ("2026-01-30", "2026-02-02", "2026-[01-30,02-02]"),
+        # cross-year: full date interval
+        ("2025-12-31", "2026-01-01", "[2025-12-31,2026-01-01]"),
+        ("2024-12-30", "2025-01-03", "[2024-12-30,2025-01-03]"),
+    ],
+)
+def test_compact_date_range(start: str, end: str, expected: str) -> None:
+    assert compact_date_range(_d(start), _d(end)) == expected

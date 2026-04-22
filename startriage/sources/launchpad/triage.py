@@ -7,33 +7,26 @@ import dataclasses
 import io
 import json
 import logging
-import re
-import sys
+import shlex
 import webbrowser
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
-from typing import IO
 
 import aiohttp
 from launchpadlib.launchpad import Launchpad
 
 from startriage.config import GeneralConfig, TeamConfig
 from startriage.enums import FetchMode
-from startriage.output import OutputFormat, hyperlink
+from startriage.output import OutputConfig, OutputFormat, TriageOutput, hyperlink
 from startriage.savebugs import BugPersistor
 
 from .finder import connect_launchpad, fetch_bugs, fetch_unapproved_bugs_for_series
-from .models import STR_STRIKETHROUGH, LaunchpadTasks, RenderContext, Task
-
-ANSI_ESCAPE = re.compile(
-    r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])",
-    re.VERBOSE,
-)
+from .models import LaunchpadTasks, RenderContext, Task
 
 
 @dataclass
-class LaunchpadTriage:
+class LaunchpadTriage(TriageOutput):
     """Holds all fetched Launchpad results for one triage run."""
 
     tasks: LaunchpadTasks
@@ -52,25 +45,37 @@ class LaunchpadTriage:
 
     async def print_section(
         self,
-        fmt: OutputFormat = OutputFormat.TERMINAL,
-        open_in_browser: bool = False,
+        cfg: OutputConfig,
+        *,
         extended: bool | None = None,
         bug_persistor: BugPersistor | None = None,
-        limit: int | None = None,
-        out: IO[str] | None = None,
     ) -> None:
-        """Print the # Bugs section."""
-        if out is None:
-            out = sys.stdout
+        """Show launchpad items."""
         if extended is None:
             extended = self.general_config.lp_extended
 
-        print("# Launchpad Bugs\n", file=out)
+        bug_count = len({t.number for t in self.tasks.tasks})
 
-        if self.mode == FetchMode.todo:
-            print(f"tag: {self.team_config.lp_todo_tag}\n", file=out)
-        elif self.mode == FetchMode.subscribed:
-            print(f"subscribed: {self.team_config.lp_team}\n", file=out)
+        match cfg.fmt:
+            case OutputFormat.TERMINAL:
+                plural = "item" if bug_count == 1 else "items"
+                print(f"## Launchpad ({bug_count} {plural})", file=cfg.out)
+                match self.mode:
+                    case FetchMode.triage:
+                        print("filter: recently updated\n", file=cfg.out)
+                    case FetchMode.todo:
+                        print(f"filter: tag={self.team_config.lp_todo_tag}\n", file=cfg.out)
+                    case FetchMode.subscribed:
+                        print(f"filter: subscribed={self.team_config.lp_team}\n", file=cfg.out)
+                    case _:
+                        raise NotImplementedError(f"{self.mode!r}")
+            case OutputFormat.MARKDOWN:
+                print("## Launchpad", file=cfg.out)
+            case _:
+                raise NotImplementedError
+
+        if bug_count == 0:
+            return
 
         ctx = RenderContext(
             nowork_statuses=self.tasks.nowork_statuses,
@@ -82,23 +87,18 @@ class LaunchpadTriage:
         await _print_bugs(
             self.tasks,
             ctx,
-            fmt,
-            open_in_browser,
+            cfg,
             extended,
             bug_persistor,
-            limit,
-            out,
             order_by_date=(self.mode == FetchMode.subscribed),
         )
         if bug_persistor is not None:
-            bug_persistor.flush()
+            bug_persistor.save()
 
-    async def write_markdown(self, path: Path, extended: bool | None = None) -> None:
+    async def write_markdown(self, path: Path) -> None:
         """Append markdown-formatted output to a file."""
-        if extended is None:
-            extended = self.general_config.lp_extended
         buf = io.StringIO()
-        await self.print_section(fmt=OutputFormat.MARKDOWN, extended=extended, out=buf)
+        await self.print_section(OutputConfig(fmt=OutputFormat.MARKDOWN, out=buf))
         with path.open("a", encoding="utf-8") as fd:
             fd.write(buf.getvalue())
 
@@ -119,128 +119,84 @@ def _load_former_bugs(bug_persistor: BugPersistor | None) -> list[str]:
     return bug_persistor.former_bugs("launchpad")
 
 
-async def _print_bugs(  # noqa: PLR0913
+async def _print_bugs(
     lp_tasks: LaunchpadTasks,
     ctx: RenderContext,
-    fmt: OutputFormat,
-    open_in_browser: bool,
+    cfg: OutputConfig,
     extended: bool,
     bug_persistor: BugPersistor | None,
-    limit: int | None,
-    out: IO[str],
     order_by_date: bool = False,
     is_sorted: bool = False,
     former_bugs: list[str] | None = None,
-    postponed_bugs: list[str] | None = None,
 ) -> None:
     tasks = lp_tasks.tasks
     if former_bugs is None:
         former_bugs = _load_former_bugs(bug_persistor)
-    if postponed_bugs is None and fmt != OutputFormat.MARKDOWN:
-        postponed_bugs = bug_persistor.load_postponed(out) if bug_persistor else []
 
     if is_sorted:
         sorted_tasks = tasks
     else:
+        # Task.sort_key is (last_activity_ours, bugid, src)
         sort_key = Task.sort_date if order_by_date else Task.sort_key
         sorted_tasks = sorted(tasks, key=sort_key, reverse=order_by_date)
 
     bugid_len = max((len(t.number) for t in sorted_tasks), default=0)
 
-    logging.info("Found %d bugs\n", len(sorted_tasks))
     if not sorted_tasks:
+        print(file=cfg.out)  # trailing newline for spacing after empty section
         return
 
-    if limit is not None and len(sorted_tasks) > limit:
-        logging.info("Displaying top & bottom %d", limit)
-        logging.info("# Recent tasks #")
-        await _print_bugs(
-            dataclasses.replace(lp_tasks, tasks=sorted_tasks[:limit]),
-            ctx,
-            fmt,
-            open_in_browser,
-            extended,
-            None,
-            None,
-            out,
-            is_sorted=True,
-            former_bugs=former_bugs,
-            postponed_bugs=postponed_bugs,
-        )
-        logging.info("---------------------------------------------------")
-        logging.info("# Oldest tasks #")
-        await _print_bugs(
-            dataclasses.replace(lp_tasks, tasks=sorted_tasks[-limit:]),
-            ctx,
-            fmt,
-            open_in_browser,
-            extended,
-            None,
-            None,
-            out,
-            is_sorted=True,
-            former_bugs=former_bugs,
-            postponed_bugs=postponed_bugs,
-        )
-        return
+    if cfg.fmt == OutputFormat.TERMINAL:
+        print(Task.get_table_header(extended=extended), file=cfg.out)
 
-    if fmt == OutputFormat.TERMINAL:
-        print(Task.get_header(extended=extended), file=out)
+    # Group tasks by bug number, preserving the global sort order of first occurrence.
+    # Within each group, sort by actionability so the most-actionable task is primary;
+    # the rest are listed as a short "further" line immediately below.
+    ordered_numbers: list[str] = list(dict.fromkeys(t.number for t in sorted_tasks))
+    groups: dict[str, list[Task]] = {n: [] for n in ordered_numbers}
+    for task in sorted_tasks:
+        groups[task.number].append(task)
 
     reported: list[str] = []
-    further = ""
-    for task in sorted_tasks:
-        if task.number in reported:
-            if fmt != OutputFormat.MARKDOWN:
-                arrow = "\N{DOWNWARDS ARROW WITH TIP RIGHTWARDS}"
-                if further and not further.startswith(f" {arrow}"):
-                    sep = ","
-                else:
-                    sep = f" {arrow}"
-                further += f"{sep} [{task.compose_dup(extended=extended)}]"
-            continue
-        if further:
-            print(further, file=out)
-            further = ""
+    for number in ordered_numbers:
+        group = sorted(groups[number], key=lambda t: t.actionability_rank(ctx))
+        primary, further_tasks = group[0], group[1:]
 
-        newbug = bool(bug_persistor and bug_persistor.compare_path and task.number not in former_bugs)
+        newbug = bool(bug_persistor and bug_persistor.compare_path and number not in former_bugs)
 
-        match fmt:
+        match cfg.fmt:
             case OutputFormat.MARKDOWN:
-                bug_link = hyperlink(task.url, f"LP #{task.number}", fmt)
-                print(
-                    f"### {bug_link} {task.status} - {task.src} - {task.short_title}\n",
-                    file=out,
-                )
-                print("\n", file=out)  # action stub
+                bug_link = hyperlink(primary.url, f"LP #{number}", cfg.fmt)
+                print(f"### {bug_link} {primary.src} \u2014 {primary.short_title}", file=cfg.out)
+                print(file=cfg.out)  # blank line as space for triager's report
+
             case OutputFormat.TERMINAL:
-                bugtext = task.get_line(
-                    ctx, bugid_len, shortlinks=True, extended=extended, newbug=newbug, fmt=fmt
+                bugtext = primary.get_table_row(
+                    ctx,
+                    bugid_len,
+                    shortlinks=True,
+                    extended=extended,
+                    newbug=newbug,
                 )
-                if postponed_bugs and task.number in postponed_bugs:
-                    # Strip ANSI color codes before applying combining strikethrough,
-                    # since inserting U+0336 inside escape sequences would corrupt them.
-                    bugtext = ANSI_ESCAPE.sub("", bugtext)
-                    bugtext = STR_STRIKETHROUGH.join(bugtext)
-                print(bugtext, file=out)
+                print(bugtext, file=cfg.out)
+                if further_tasks:
+                    further_tasks_strs = [d.compose_dup(extended=extended) for d in further_tasks]
+                    arrow = "\N{DOWNWARDS ARROW WITH TIP RIGHTWARDS}"
+                    print(f" {arrow} {', '.join(further_tasks_strs)}", file=cfg.out)
+
             case _:
-                raise ValueError(f"Unknown output format: {fmt!r}")
+                raise NotImplementedError
 
-        reported.append(task.number)
+        reported.append(number)
 
-    if open_in_browser:
-        initial_open = True
-        for task in sorted_tasks:
-            if task.number not in reported:
-                if initial_open:
-                    webbrowser.open(task.url)
-                    initial_open = False
-                else:
-                    webbrowser.open_new_tab(task.url)
-                await asyncio.sleep(0.2)
+    if cfg.open_in_browser:
+        for number in ordered_numbers:
+            url = groups[number][0].url
+            webbrowser.open_new_tab(url)
+            await asyncio.sleep(0.2)
 
-    if further:
-        print(further, file=out)
+    if cfg.fmt == OutputFormat.TERMINAL:
+        print(file=cfg.out)  # blank line after bugs for visual separation
 
     if bug_persistor is not None and not bug_persistor.no_save:
         bug_persistor.record("launchpad", reported)
@@ -248,19 +204,16 @@ async def _print_bugs(  # noqa: PLR0913
 
     if bug_persistor is not None and bug_persistor.compare_path:
         closed = [x for x in former_bugs if x not in reported]
-        print(f"\nBugs gone compared with {bug_persistor.compare_path!r}:", file=out)
+        print(f"\nBugs gone compared with {shlex.quote(str(bug_persistor.compare_path))}:", file=cfg.out)
+        gone_cfg = dataclasses.replace(cfg, open_in_browser=False)
         await _print_bugs(
             dataclasses.replace(lp_tasks, tasks=_bugs_to_tasks(closed, lp_tasks.lp)),
             ctx,
-            fmt,
-            False,
+            gone_cfg,
             extended,
             None,
-            None,
-            out,
             is_sorted=True,
             former_bugs=former_bugs,
-            postponed_bugs=postponed_bugs,
         )
 
 
@@ -285,14 +238,24 @@ async def find(
     update_filter: str | None = None,
     age: datetime | None = None,
     old: datetime | None = None,
+    show_expiration: bool = True,
 ) -> LaunchpadTriage:
     """Fetch Launchpad bugs, then bulk-check unapproved queue concurrently."""
-    effective_update_filter = update_filter or general_config.lp_update_filter
+    effective_update_filter = update_filter or general_config.lp_triage_updates
 
     logging.info("Fetching Launchpad bugs (this may take a while)…")
     lp = connect_launchpad()
     lp_tasks = await asyncio.to_thread(
-        fetch_bugs, lp, team_config, start_date, end_date, mode, effective_update_filter
+        fetch_bugs,
+        lp,
+        team_config,
+        start_date,
+        end_date,
+        mode,
+        effective_update_filter,
+        show_expiration and mode == FetchMode.triage,
+        general_config.lp_expire_tagged,
+        general_config.lp_expire,
     )
     logging.info("Launchpad: %d bugs fetched. Checking unapproved queue…", len(lp_tasks.tasks))
 

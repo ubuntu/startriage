@@ -1,9 +1,8 @@
 [general]
-discourse_site = "https://discourse.ubuntu.com"
 lp_expire_tagged = 60
 lp_expire = 180
 lp_extended = false
-lp_update_filter = "theirs"
+lp_triage_updates = "theirs"
 
 [team.ubuntu-server]
 lp_team = "ubuntu-server"
@@ -20,6 +19,12 @@ lp_ignore_packages = [
 ]
 discourse_categories = "project/server,documentation/server-guide"
 discourse_triage_category_id = 475
-github_org = "canonical"
-github_repos = ["ubuntu-maintainers-handbook", "ubuntu-server-documentation"]
+github_repos = [
+    "canonical/ubuntu-maintainers-handbook",
+    {name = "canonical/ubuntu-server-documentation", todo_labels = ["For: Server ToDo"]},
+    "canonical/containerd-stable",
+    "canonical/containerd-app",
+    "canonical/runc-app",
+    "canonical/runc-stable",
+]
 github_todo_label = "server-todo"

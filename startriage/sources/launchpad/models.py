@@ -18,7 +18,7 @@ from typing import Any
 
 from launchpadlib.launchpad import Launchpad
 
-from startriage.output import OutputFormat, hyperlink
+from startriage.output import hyperlink, truncate_string
 
 DISTRIBUTION_RESOURCE_TYPE_LINK = "https://api.launchpad.net/devel/#distribution"
 DISTRIBUTION_SOURCE_PACKAGE_RESOURCE_TYPE_LINK = (
@@ -27,26 +27,17 @@ DISTRIBUTION_SOURCE_PACKAGE_RESOURCE_TYPE_LINK = (
 SOURCE_PACKAGE_RESOURCE_TYPE_LINK = "https://api.launchpad.net/devel/#source_package"
 PROJECT_RESOURCE_TYPE_LINK = "https://api.launchpad.net/devel/#project"
 
-COLOR_STATUS_WORKNEEDED = "\033[0;34m"  # blue
-COLOR_STATUS_NOWORK = "\033[0;32m"  # green
+COLOR_STATUS_WAITOTHER = "\033[0;34m"  # blue
+COLOR_STATUS_DONE = "\033[0;32m"  # green
 COLOR_STATUS_OPEN = "\033[0;31m"  # red
 COLOR_RESET = "\033[0m"
-STR_STRIKETHROUGH = "\u0336"
 
 LONG_URL_ROOT = "https://bugs.launchpad.net/ubuntu/+bug/"
-SHORTLINK_ROOT = "https://pad.lv/"
 LPBUGREF = "LP: #"
 
 
-def truncate_string(text: str, length: int = 20) -> str:
-    s = str(text)
-    if len(s) > length:
-        return s[: length - 1] + "\u2026"
-    return s
-
-
 def mark(text: str, color: str) -> str:
-    return color + text + COLOR_RESET
+    return "".join([color, text, COLOR_RESET])
 
 
 @dataclass
@@ -173,10 +164,6 @@ class Task:
         return LONG_URL_ROOT + self.number
 
     @property
-    def shortlink(self) -> str:
-        return SHORTLINK_ROOT + self.number
-
-    @property
     def bug_reference(self) -> str:
         return LPBUGREF + self.number
 
@@ -216,9 +203,9 @@ class Task:
         for series, lp_task in self._sibling_tasks.items():
             char = "D" if series[0] == "-" else series[0].upper()
             if lp_task.status in ctx.nowork_statuses:
-                char = mark(char, COLOR_STATUS_NOWORK)
+                char = mark(char, COLOR_STATUS_DONE)
             elif self.is_in_unapproved(ctx):
-                char = mark(char, COLOR_STATUS_WORKNEEDED)
+                char = mark(char, COLOR_STATUS_WAITOTHER)
             elif lp_task.status in ctx.open_statuses:
                 char = mark(char, COLOR_STATUS_OPEN)
             info += char
@@ -229,8 +216,8 @@ class Task:
         return info
 
     def get_flags(self, ctx: RenderContext, newbug: bool = False) -> str:
-        v_needed = mark("v", COLOR_STATUS_WORKNEEDED)
-        v_done = mark("V", COLOR_STATUS_NOWORK)
+        v_needed = mark("v", COLOR_STATUS_WAITOTHER)
+        v_done = mark("V", COLOR_STATUS_DONE)
         return (
             ("*" if self.subscribed else " ")
             + ("+" if not self.last_activity_ours else " ")
@@ -241,25 +228,24 @@ class Task:
         )
 
     @staticmethod
-    def get_header(extended: bool = False) -> str:
+    def get_table_header(extended: bool = False) -> str:
         text = "%-12s | %-6s | %-7s | %-13s | %-19s |" % ("Bug", "Flags", "Release", "Status", "Package")
         if extended:
             text += " %-8s | %-10s | %-13s |" % ("Last Upd", "Prio", "Assignee")
-        text += " %-73s |" % "Title"
+        text += " %-60s |" % "Title"
         return text
 
-    def get_line(
+    def get_table_row(
         self,
         ctx: RenderContext,
         bugid_len: int,
         shortlinks: bool = True,
         extended: bool = False,
         newbug: bool = False,
-        fmt: OutputFormat = OutputFormat.TERMINAL,
     ) -> str:
         bug_ref = self.bug_reference if shortlinks else self.url
         fmt_len = bugid_len + len(LPBUGREF if shortlinks else LONG_URL_ROOT)
-        bug_str = hyperlink(self.url, f"%-{fmt_len}s" % bug_ref, fmt)
+        bug_str = hyperlink(self.url, f"%-{fmt_len}s" % bug_ref)
 
         text = "%-12s | %6s | %-7s | %-13s | %-19s |" % (
             bug_str,
@@ -274,7 +260,8 @@ class Task:
                 self.importance,
                 truncate_string(self.assignee or "", 12),
             )
-        text += " %-73s |" % truncate_string(self.short_title, 73)
+        text += " %-60s |" % truncate_string(self.short_title, 60)
+
         return text
 
     def compose_dup(self, extended: bool = False) -> str:
@@ -282,6 +269,20 @@ class Task:
         if extended and self.assignee:
             text += f"@{truncate_string(self.assignee, 9)}"
         return text
+
+    def actionability_rank(self, ctx: RenderContext) -> int:
+        """Lower = more actionable; used to pick the primary row when a bug
+        has multiple tasks.
+
+        0 — status is in open_statuses (needs work)
+        1 — status is neither open nor done (e.g. Fix Committed, Incomplete)
+        2 — status is in nowork_statuses (won't fix, invalid, fix released, …)
+        """
+        if self.status in ctx.open_statuses:
+            return 0
+        if self.status in ctx.nowork_statuses:
+            return 2
+        return 1
 
     def sort_key(self):
         return (not self.last_activity_ours, self.number, self.src)
@@ -332,3 +333,5 @@ class LaunchpadTasks:
     changes_pairs: list[tuple[str, str]] = field(default_factory=list)
     nowork_statuses: list[str] = field(default_factory=list)
     open_statuses: list[str] = field(default_factory=list)
+    expiring_tagged: list[Task] = field(default_factory=list)
+    expiring_subscribed: list[Task] = field(default_factory=list)

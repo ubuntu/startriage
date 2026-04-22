@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import os
 import subprocess
+import urllib.parse
 from datetime import date, datetime
 
 import aiohttp
 
-from .models import Issue, PullRequest
+from .models import Issue, PullRequest, RepoResult
 
 _GH_API = "https://api.github.com"
 _GITHUB_TOKEN_ENV = "GITHUB_TOKEN"
@@ -95,45 +95,48 @@ def _in_range(dt: datetime | None, start: date | None, end: date | None) -> bool
 
 async def fetch_repo(
     session: aiohttp.ClientSession,
-    org: str,
     repo: str,
     start: date | None,
     end: date | None,
-    label: str | None = None,
-) -> tuple[list[PullRequest], list[Issue]]:
+    labels: list[str] | None = None,
+) -> RepoResult:
     """Fetch PRs and Issues for one repo updated within [start, end].
 
-    When *label* is given, only items carrying that label are returned.
-    All pages are fetched via the GitHub Link-header pagination protocol.
+    Uses the /issues endpoint exclusively — it returns both issues and PRs and
+    supports server-side label filtering (unlike /pulls which ignores labels).
+    Multiple labels are ORed: one request is made per label and results are
+    deduplicated by number.  When *labels* is empty/None, all open items are
+    returned without label filtering.
     """
-    base = f"{_GH_API}/repos/{org}/{repo}"
-    pulls_url = f"{base}/pulls?state=open&sort=updated&direction=desc&per_page=100"
-    issues_url = f"{base}/issues?state=open&sort=updated&direction=desc&per_page=100"
-    if label:
-        pulls_url += f"&labels={label}"
-        issues_url += f"&labels={label}"
+    base = f"{_GH_API}/repos/{repo}/issues?state=open&sort=updated&direction=desc&per_page=100"
 
-    prs_data, issues_data = await asyncio.gather(
-        _get_all_pages(session, pulls_url),
-        _get_all_pages(session, issues_url),
-    )
+    if labels:
+        # Fetch each label separately and deduplicate (GitHub AND-s multiple labels in one request)
+        seen: set[int] = set()
+        raw: list[dict] = []
+        for lbl in labels:
+            page_data = await _get_all_pages(session, base + f"&labels={urllib.parse.quote(lbl, safe='')}")
+            for item in page_data:
+                if item["number"] not in seen:
+                    seen.add(item["number"])
+                    raw.append(item)
+    else:
+        raw = await _get_all_pages(session, base)
 
     prs: list[PullRequest] = []
-    for d in prs_data:
-        pr = PullRequest.from_api_dict(d)
-        if start is None or _in_range(pr.created_at, start, end) or _in_range(pr.updated_at, start, end):
-            prs.append(pr)
-
     issues: list[Issue] = []
-    for d in issues_data:
+    for d in raw:
         if "pull_request" in d:
-            continue  # GH issues endpoint also returns PRs
-        issue = Issue.from_api_dict(d)
-        if (
-            start is None
-            or _in_range(issue.created_at, start, end)
-            or _in_range(issue.updated_at, start, end)
-        ):
-            issues.append(issue)
+            pr = PullRequest.from_api_dict(d)
+            if start is None or _in_range(pr.created_at, start, end) or _in_range(pr.updated_at, start, end):
+                prs.append(pr)
+        else:
+            issue = Issue.from_api_dict(d)
+            if (
+                start is None
+                or _in_range(issue.created_at, start, end)
+                or _in_range(issue.updated_at, start, end)
+            ):
+                issues.append(issue)
 
-    return prs, issues
+    return RepoResult(repo, prs, issues, labels=labels)

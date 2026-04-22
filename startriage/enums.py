@@ -14,8 +14,8 @@ class UpdateFilter(StrEnum):
 
 
 class FetchMode(StrEnum):
-    """Launchpad bug fetch mode."""
+    """Bug analysis mode."""
 
     triage = "triage"  # date-range bugs for daily triage
     todo = "todo"  # tag-filtered housekeeping bugs
-    subscribed = "subscribed"  # directly subscribed bugs
+    subscribed = "subscribed"  # list subscribed bugs

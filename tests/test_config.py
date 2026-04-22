@@ -50,7 +50,6 @@ def test_team_override_replaces_ignore_list(tmp_path):
         lp_todo_tag = "server-todo"
         lp_ignore_packages = []
         discourse_categories = "project/server"
-        github_org = "canonical"
         github_repos = []
     """,
     )
@@ -67,7 +66,6 @@ def test_custom_team_added(tmp_path):
         lp_todo_tag = "desktop-todo"
         lp_ignore_packages = []
         discourse_categories = "desktop"
-        github_org = "canonical"
         github_repos = []
     """,
     )
@@ -88,12 +86,12 @@ def test_get_team_unknown(tmp_path):
         config.get_team("ubuntu-bogus")
 
 
-def test_invalid_lp_update_filter(tmp_path):
+def test_invalid_lp_triage_updates_filter(tmp_path):
     p = _write_toml(
         tmp_path,
         """\
         [general]
-        lp_update_filter = "invalid_value"
+        lp_triage_updates = "invalid_value"
     """,
     )
     with pytest.raises(ValidationError):

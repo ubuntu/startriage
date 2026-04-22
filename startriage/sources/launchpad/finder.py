@@ -1,14 +1,13 @@
 """Launchpad bug fetcher for startriage.
 
 Performance improvements over ustriage:
-1. _sibling_tasks is @lru_cache'd on the Task - computed once per task.
-2. Unapproved-queue check is done in bulk: one getPackageUploads() call
-   per active series (not per bug), then we match bugs against that set.
-   This is the main source of the old 30-minute runtime.
-3. Changelog URL fetches (for unapproved matching) are done concurrently
-   via asyncio.gather() + aiohttp after the LP query returns.
-4. last_activity_ours uses only the last 3 messages (same as ustriage),
-   keeping per-bug API calls minimal.
+- Unapproved-queue check is done in bulk: one getPackageUploads() call
+  per active series (not per bug), then we match bugs against that set.
+  This is the main source of the old 30-minute runtime.
+- Changelog URL fetches (for unapproved matching) are done concurrently
+  via asyncio.gather() + aiohttp after the LP query returns.
+- last_activity_ours uses only the last 3 messages (same as ustriage),
+  keeping per-bug API calls minimal.
 """
 
 from __future__ import annotations
@@ -22,6 +21,7 @@ import debian.deb822
 import platformdirs
 from launchpadlib.credentials import UnencryptedFileCredentialStore
 from launchpadlib.launchpad import Launchpad
+from lazr.restfulclient.errors import ClientError
 
 from startriage.config import TeamConfig
 from startriage.enums import FetchMode
@@ -82,14 +82,15 @@ def _search_tasks_all_series(distro, *args, **kwargs):
     return result.values()
 
 
-def _last_activity_ours(task_obj, activity_subscriber_links: set[str]) -> bool:
+def _last_activity_ours(
+    task_obj, activity_subscriber_links: set[str], last_messages_considered: int = 3
+) -> bool:
     if not activity_subscriber_links:
         return False
     activity_list = []
     msgs = task_obj.bug.messages
     last = len(msgs)
-    start = max(0, last - 3)
-    from lazr.restfulclient.errors import ClientError
+    start = max(0, last - last_messages_considered)
 
     for msg in msgs[start:last]:
         try:
@@ -145,6 +146,9 @@ def fetch_bugs(
     end_date: date | None,
     mode: FetchMode,
     update_filter: str | None,
+    show_expiration: bool = False,
+    expire_tagged_days: int = 60,
+    expire_days: int = 180,
 ) -> LaunchpadTasks:
     """Synchronous LP fetch - run inside asyncio.to_thread().
 
@@ -251,6 +255,69 @@ def fetch_bugs(
         )
         tasks.add(task)
 
+    # Expiration section: bugs that fell through the triage window N days ago.
+    # Uses the same shifted-window set-difference pattern as the main triage query.
+    expiring_tagged: list[Task] = []
+    expiring_subscribed: list[Task] = []
+    if mode == FetchMode.triage and show_expiration and start_date and end_date:
+
+        def _expiring_window(days: int, tags: list[str], statuses: list[str]) -> list[Task]:
+            shift = timedelta(days=days)
+            w_start = datetime.combine(start_date - shift, datetime.min.time()).replace(tzinfo=timezone.utc)
+            w_end = datetime.combine(end_date - shift + timedelta(days=1), datetime.min.time()).replace(
+                tzinfo=timezone.utc
+            )
+            since_start = {
+                (t.bug_link, _fast_target_name(t)): t
+                for t in _search_tasks_all_series(
+                    ubuntu,
+                    modified_since=w_start,
+                    bug_subscriber=team,
+                    tags=tags,
+                    tags_combinator="All",
+                    status=statuses,
+                )
+            }
+            since_end = {
+                (t.bug_link, _fast_target_name(t)): t
+                for t in _search_tasks_all_series(
+                    ubuntu,
+                    modified_since=w_end,
+                    bug_subscriber=team,
+                    tags=tags,
+                    tags_combinator="All",
+                    status=statuses,
+                )
+            }
+            result = []
+            for key, lp_task in since_start.items():
+                if key in since_end:
+                    continue
+                src = _fast_target_name(lp_task)
+                if src in team_config.lp_ignore_packages:
+                    continue
+                is_ours = _last_activity_ours(lp_task, activity_links)
+                result.append(
+                    Task.create_from_launchpadlib_object(lp_task, subscribed=True, last_activity_ours=is_ours)
+                )
+            return result
+
+        logging.info("Fetching expiring tagged bugs (~%d days ago)\u2026", expire_tagged_days)
+        expiring_tagged = _expiring_window(
+            expire_tagged_days,
+            [team_config.lp_todo_tag, "-bot-stop-nagging"],
+            OPEN_BUG_STATUSES,
+        )
+        logging.info("Launchpad: %d expiring tagged bugs.", len({t.number for t in expiring_tagged}))
+
+        logging.info("Fetching expiring subscribed bugs (~%d days ago)\u2026", expire_days)
+        expiring_subscribed = _expiring_window(
+            expire_days,
+            ["-bot-stop-nagging", f"-{team_config.lp_todo_tag}"],
+            OPEN_BUG_STATUSES,
+        )
+        logging.info("Launchpad: %d expiring subscribed bugs.", len({t.number for t in expiring_subscribed}))
+
     active_series = [s.name for s in ubuntu.series_collection if s.active]
 
     # Collect (pkg_name, changes_url) pairs for all active series - all LP access here,
@@ -264,4 +331,12 @@ def fetch_bugs(
             if url:
                 changes_pairs.append((upload.package_name, str(url)))
 
-    return LaunchpadTasks(list(tasks), lp, changes_pairs, NOWORK_BUG_STATUSES, OPEN_BUG_STATUSES)
+    return LaunchpadTasks(
+        list(tasks),
+        lp,
+        changes_pairs,
+        NOWORK_BUG_STATUSES,
+        OPEN_BUG_STATUSES,
+        expiring_tagged,
+        expiring_subscribed,
+    )
