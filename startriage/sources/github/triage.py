@@ -11,17 +11,17 @@ from pathlib import Path
 
 import aiohttp
 
-from startriage.config import GithubRepoConfig
-from startriage.enums import FetchMode
-from startriage.output import OutputConfig, OutputFormat, TriageOutput, hyperlink, truncate_string
-from startriage.savebugs import BugPersistor
-
-from .finder import _make_headers, fetch_repo
+from ...config import StarTriageConfig
+from ...enums import FetchMode
+from ...output import OutputConfig, OutputFormat, TriageResult, hyperlink, truncate_string
+from ...savebugs import BugPersistor
+from ...source import TaskFilterOptions
+from .finder import _make_headers, fetch_repo, get_github_token
 from .models import GithubItemEntry, GitHubItemType, RepoResult
 
 
 @dataclass
-class GithubTriage(TriageOutput):
+class GithubTriage(TriageResult):
     """Holds all fetched GitHub results for one triage run."""
 
     start: date | None
@@ -51,7 +51,7 @@ class GithubTriage(TriageOutput):
     ) -> None:
         """Render a unified table of GitHub items; return list of reported item keys."""
         num_w = max(len(str(item.item.number)) for item in entries) + 1  # +1 for '#'
-        repo_w = min(30, max(len(item.repo) for item in entries))
+        repo_w = min(35, max(len(item.repo) for item in entries))
         type_w = 5  # "Issue" is the longest
         assignee_w = 12
 
@@ -90,7 +90,7 @@ class GithubTriage(TriageOutput):
                 case OutputFormat.MARKDOWN:
                     entry_link = hyperlink(entry.url, f"{entry.item_type} {item_key}", cfg.fmt)
                     print(
-                        f"### {entry_link}: {truncate_string(entry.item.title, 40)}\n",
+                        f"### {entry_link}: {truncate_string(entry.item.title, 50)}\n",
                         file=cfg.out,
                     )
                 case OutputFormat.TERMINAL:
@@ -98,7 +98,7 @@ class GithubTriage(TriageOutput):
                     repo_col = truncate_string(entry.repo, repo_w, pad=True)
                     assignee_col = truncate_string(assignee, assignee_w, pad=True)
                     row_str = f"{link} | {entry.item_type:<{type_w}} | {repo_col} | {assignee_col}"
-                    print(f"{row_str} | {date_str} | {truncate_string(entry.item.title, 40)}", file=cfg.out)
+                    print(f"{row_str} | {date_str} | {truncate_string(entry.item.title, 50)}", file=cfg.out)
                 case _:
                     raise NotImplementedError
 
@@ -110,8 +110,6 @@ class GithubTriage(TriageOutput):
     async def print_section(
         self,
         cfg: OutputConfig,
-        *,
-        bug_persistor: BugPersistor | None = None,
     ) -> None:
         """
         Print the GitHub section as a unified table.
@@ -122,47 +120,37 @@ class GithubTriage(TriageOutput):
         match cfg.fmt:
             case OutputFormat.MARKDOWN:
                 print("## GitHub", file=cfg.out)
+                if not items:
+                    print("no activity", file=cfg.out)
             case OutputFormat.TERMINAL:
                 print(f"## GitHub ({len(items)} {plural})", file=cfg.out)
+                match self.mode:
+                    case FetchMode.triage:
+                        print("filter: recently updated", file=cfg.out)
+                    case FetchMode.todo | FetchMode.subscribed:
+                        print("filter: todo label", file=cfg.out)
+                    case _:
+                        raise NotImplementedError
             case _:
                 raise NotImplementedError
 
-        if not items:
-            match cfg.fmt:
-                case OutputFormat.MARKDOWN:
-                    print("no activity", file=cfg.out)
-                case OutputFormat.TERMINAL:
-                    ...
-                case _:
-                    raise NotImplementedError
-
-            if bug_persistor:
-                bug_persistor.record("github", [])
-                bug_persistor.save()
-            return
-
-        if bug_persistor:
-            former_bugs = set(bug_persistor.former_bugs("github"))
+        if cfg.bug_persistor:
+            former_bugs = set(cfg.bug_persistor.former_bugs("github"))
         else:
             former_bugs = set()
 
         await self._print_items(items, cfg, former_bugs)
-        print(file=cfg.out)
 
-        item_ids = {f"{entry.repo}#{entry.item.number}" for entry in items}
+        if cfg.fmt == OutputFormat.TERMINAL:
+            print(file=cfg.out)
 
-        if bug_persistor:
-            bug_persistor.record("github", list(item_ids))
-            bug_persistor.save()
-
-        if former_bugs:
-            gone = [k for k in former_bugs if k not in item_ids]
-            if gone:
-                assert bug_persistor is not None
-                print(f"GitHub items gone compared with {bug_persistor.compare_path!r}:", file=cfg.out)
-                for key in gone:
-                    print(f"  {key}", file=cfg.out)
-                print(file=cfg.out)
+            if former_bugs:
+                gone = [k for k in former_bugs if k not in {entry.key for entry in items}]
+                if gone and cfg.bug_persistor:
+                    print(f"\nItems gone compared with {cfg.bug_persistor.compare_str}:", file=cfg.out)
+                    for key in gone:
+                        print(f"  {key}", file=cfg.out)
+                    print(file=cfg.out)
 
     async def write_markdown(self, path: Path) -> None:
         """Append markdown-formatted output to a file."""
@@ -170,6 +158,11 @@ class GithubTriage(TriageOutput):
         await self.print_section(OutputConfig(fmt=OutputFormat.MARKDOWN, out=buf))
         with path.open("a", encoding="utf-8") as fh:
             fh.write(buf.getvalue())
+
+    async def record(self, persistor: BugPersistor) -> None:
+        items = self._collect_items()
+        item_ids = {entry.key for entry in items}
+        persistor.record("github", item_ids)
 
     def to_dict(self) -> dict:
         """Serialise results to a plain dict (JSON-compatible)."""
@@ -205,27 +198,31 @@ class GithubTriage(TriageOutput):
 
 
 async def find(
-    repos: list[GithubRepoConfig],
-    start: date | None,
-    end: date | None,
-    token: str | None = None,
-    default_label: str | None = None,
-    mode: FetchMode = FetchMode.triage,
+    config: StarTriageConfig,
+    filter: TaskFilterOptions,
+    mode: FetchMode,
 ) -> GithubTriage:
     """Fetch GitHub data for all repos concurrently."""
+
+    token = get_github_token()
+
+    team_config = config.get_team(filter.team)
     headers = _make_headers(token)
+
+    default_label = team_config.github_todo_label or team_config.lp_todo_tag
+    team_label_list: list[str] | None = [default_label] if default_label else None
 
     async with aiohttp.ClientSession(headers=headers) as session:
         tasks = [
             fetch_repo(
                 session,
                 repo.name,
-                start,
-                end,
-                repo.todo_labels or ([default_label] if default_label else None),
+                filter.start,
+                filter.end,
+                labels=(repo.todo_labels or team_label_list if mode == FetchMode.todo else None),
             )
-            for repo in repos
+            for repo in team_config.github_repos
         ]
         results = await asyncio.gather(*tasks)
 
-    return GithubTriage(start=start, end=end, results=results, mode=mode)
+    return GithubTriage(start=filter.start, end=filter.end, results=results, mode=mode)

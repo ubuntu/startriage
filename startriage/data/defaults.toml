@@ -17,8 +17,11 @@ lp_ignore_packages = [
     "maas",
     "ubuntu-advantage-tools",
 ]
-discourse_categories = "project/server,documentation/server-guide"
-discourse_triage_category_id = 475
+discourse_categories = [
+    "project/server",
+    "documentation/server-guide"
+]
+discourse_triage_categories = ["project/server/server-triage"]
 github_repos = [
     "canonical/ubuntu-maintainers-handbook",
     {name = "canonical/ubuntu-server-documentation", todo_labels = ["For: Server ToDo"]},

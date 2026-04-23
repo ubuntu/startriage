@@ -11,10 +11,14 @@ from functools import lru_cache
 from pathlib import Path
 from typing import IO
 
+from .savebugs import BugPersistor
+
 
 class OutputFormat(StrEnum):
     TERMINAL = "terminal"
     MARKDOWN = "markdown"
+    # TODO: OutputConfig should then provide something like an
+    # out `dict` so we can properly nest items
     JSON = "json"
 
 
@@ -24,9 +28,11 @@ class OutputConfig:
     out: IO[str]
     open_in_browser: bool = False
     terminal_links: bool = True
+    bug_persistor: BugPersistor | None = None
+    markdown_path: Path | None = None
 
 
-class TriageOutput(ABC):
+class TriageResult(ABC):
     @abstractmethod
     async def print_section(
         self,
@@ -36,6 +42,10 @@ class TriageOutput(ABC):
 
     @abstractmethod
     async def write_markdown(self, path: Path) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    async def record(self, persistor: BugPersistor) -> None:
         raise NotImplementedError
 
 

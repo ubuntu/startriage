@@ -1,20 +1,10 @@
-"""Launchpad bug fetcher for startriage.
-
-Performance improvements over ustriage:
-- Unapproved-queue check is done in bulk: one getPackageUploads() call
-  per active series (not per bug), then we match bugs against that set.
-  This is the main source of the old 30-minute runtime.
-- Changelog URL fetches (for unapproved matching) are done concurrently
-  via asyncio.gather() + aiohttp after the LP query returns.
-- last_activity_ours uses only the last 3 messages (same as ustriage),
-  keeping per-bug API calls minimal.
-"""
+"""Launchpad bug fetcher for startriage."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import date, datetime, timedelta, timezone
+from datetime import timedelta
 
 import aiohttp
 import debian.deb822
@@ -23,9 +13,10 @@ from launchpadlib.credentials import UnencryptedFileCredentialStore
 from launchpadlib.launchpad import Launchpad
 from lazr.restfulclient.errors import ClientError
 
-from startriage.config import TeamConfig
-from startriage.enums import FetchMode
+from startriage.source import TaskFilterOptions
 
+from ...config import TeamConfig
+from ...enums import FetchMode
 from .models import LaunchpadTasks, Task
 
 # apparently not exported by launchpadlib...
@@ -142,11 +133,9 @@ async def fetch_unapproved_bugs_for_series(
 def fetch_bugs(
     lp: Launchpad,
     team_config: TeamConfig,
-    start_date: date | None,
-    end_date: date | None,
+    filter: TaskFilterOptions,
     mode: FetchMode,
     update_filter: str | None,
-    show_expiration: bool = False,
     expire_tagged_days: int = 60,
     expire_days: int = 180,
 ) -> LaunchpadTasks:
@@ -163,22 +152,13 @@ def fetch_bugs(
     activity_people = lp.people[team_config.lp_team].participants
     activity_links = {p.self_link for p in activity_people}
 
-    start_dt = (
-        datetime.combine(start_date, datetime.min.time()).replace(tzinfo=timezone.utc) if start_date else None
-    )
-    end_dt = (
-        datetime.combine(end_date + timedelta(days=1), datetime.min.time()).replace(tzinfo=timezone.utc)
-        if end_date
-        else None
-    )
-
     match mode:
         case FetchMode.triage:
             bugs_start = {
                 (t.bug_link, _fast_target_name(t)): t
                 for t in _search_tasks_all_series(
                     ubuntu,
-                    modified_since=start_dt,
+                    modified_since=filter.start,
                     structural_subscriber=team,
                     status=POSSIBLE_BUG_STATUSES,
                 )
@@ -187,7 +167,7 @@ def fetch_bugs(
                 (t.bug_link, _fast_target_name(t)): t
                 for t in _search_tasks_all_series(
                     ubuntu,
-                    modified_since=end_dt,
+                    modified_since=filter.end,
                     structural_subscriber=team,
                     status=POSSIBLE_BUG_STATUSES,
                 )
@@ -196,7 +176,7 @@ def fetch_bugs(
                 (t.bug_link, _fast_target_name(t)): t
                 for t in _search_tasks_all_series(
                     ubuntu,
-                    modified_since=start_dt,
+                    modified_since=filter.start,
                     structural_subscriber=team,
                     bug_subscriber=team,
                     status=POSSIBLE_BUG_STATUSES,
@@ -259,14 +239,13 @@ def fetch_bugs(
     # Uses the same shifted-window set-difference pattern as the main triage query.
     expiring_tagged: list[Task] = []
     expiring_subscribed: list[Task] = []
-    if mode == FetchMode.triage and show_expiration and start_date and end_date:
+    if mode == FetchMode.triage and filter.show_expiration and filter.start and filter.end:
 
         def _expiring_window(days: int, tags: list[str], statuses: list[str]) -> list[Task]:
             shift = timedelta(days=days)
-            w_start = datetime.combine(start_date - shift, datetime.min.time()).replace(tzinfo=timezone.utc)
-            w_end = datetime.combine(end_date - shift + timedelta(days=1), datetime.min.time()).replace(
-                tzinfo=timezone.utc
-            )
+            w_start = filter.start - shift
+            w_end = filter.end - shift
+
             since_start = {
                 (t.bug_link, _fast_target_name(t)): t
                 for t in _search_tasks_all_series(

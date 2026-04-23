@@ -8,7 +8,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
-from startriage.enums import UpdateFilter
+from .enums import UpdateFilter
 
 DEFAULT_USER_CONFIG = Path("~/.config/startriage.toml")
 
@@ -50,8 +50,8 @@ class TeamConfig(BaseModel):
     lp_team: str
     lp_todo_tag: str
     lp_ignore_packages: list[str] = []
-    discourse_categories: str
-    discourse_triage_category_id: int | None = None
+    discourse_categories: list[str] = []
+    discourse_triage_categories: list[str] = []
     github_todo_label: str | None = None  # default todo label that don't specify their own
     github_repos: list[GithubRepoConfig] = []
 

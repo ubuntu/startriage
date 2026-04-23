@@ -1,12 +1,4 @@
-"""Launchpad Task model for startriage.
-
-Ported from ustriage/task.py with these improvements:
-- _sibling_tasks cached via @lru_cache (was recomputed on each call)
-- Unapproved-queue check done in bulk in finder.py (one getPackageUploads()
-  per series, not per bug); result passed via RenderContext, not class state.
-- All mutable rendering state (bug statuses, unapproved cache, age thresholds)
-  is passed explicitly via RenderContext — no class-level injection.
-"""
+"""Launchpad Task model for startriage."""
 
 from __future__ import annotations
 
@@ -51,8 +43,8 @@ class RenderContext:
     # {(bug_number, src_package): True} -- populated by finder bulk unapproved check
     unapproved_cache: dict[tuple[str, str], bool] = field(default_factory=dict)
     # datetime thresholds for U (recently updated) and O (old) flags
-    age: datetime | None = None
-    old: datetime | None = None
+    recent_since: datetime | None = None
+    old_since: datetime | None = None
 
 
 class Task:
@@ -152,10 +144,10 @@ class Task:
         return ctx.unapproved_cache.get((self.number, self.src), False)
 
     def _is_updated(self, ctx: RenderContext) -> bool:
-        return bool(ctx.age and self.date_last_updated > ctx.age)
+        return bool(ctx.recent_since and self.date_last_updated > ctx.recent_since)
 
     def _is_old(self, ctx: RenderContext) -> bool:
-        return bool(ctx.old and self.date_last_updated < ctx.old)
+        return bool(ctx.old_since and self.date_last_updated < ctx.old_since)
 
     def _is_verification_needed(self) -> bool:
         return any("verification-needed-" in t for t in self.tags)
@@ -163,8 +155,9 @@ class Task:
     def _is_verification_done(self) -> bool:
         return any("verification-done-" in t for t in self.tags)
 
-    def get_releases(self, ctx: RenderContext, length: int) -> str:
+    def release_tasks_str(self, ctx: RenderContext, width: int = 0) -> str:
         info = ""
+        visible_len = 0
         for series, lp_task in self._sibling_tasks.items():
             char = "D" if series[0] == "-" else series[0].upper()
             if lp_task.status in ctx.nowork_statuses:
@@ -174,8 +167,9 @@ class Task:
             elif lp_task.status in ctx.open_statuses:
                 char = mark(char, COLOR_STATUS_OPEN)
             info += char
-
-        info = info.ljust(length)
+            visible_len += 1
+        if width > visible_len:
+            info += " " * (width - visible_len)
         return info
 
     def get_flags(self, ctx: RenderContext, newbug: bool = False) -> str:
@@ -210,10 +204,10 @@ class Task:
         fmt_len = bugid_len + len(LPBUGREF if shortlinks else LONG_URL_ROOT)
         bug_str = hyperlink(self.url, f"%-{fmt_len}s" % bug_ref)
 
-        text = "%-12s | %6s | %-7s | %-13s | %-19s |" % (
+        text = "%-12s | %6s | %s | %-13s | %-19s |" % (
             bug_str,
             self.get_flags(ctx, newbug),
-            self.get_releases(ctx, 7),
+            self.release_tasks_str(ctx, width=7),
             self.status,
             truncate_string(self.src, 19),
         )

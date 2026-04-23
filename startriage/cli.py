@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import dataclasses
 import logging
 import sys
 import tomllib
@@ -13,13 +12,14 @@ from pathlib import Path
 
 import tomli_w
 
-from startriage.config import DEFAULT_USER_CONFIG, StarTriageConfig, load_config, resolve_team_name
-from startriage.dates import parse_interval, triage_task_date_range
-from startriage.enums import UpdateFilter
-from startriage.log import log_setup
-from startriage.output import OutputConfig, OutputFormat
-from startriage.savebugs import SaveConfig
-from startriage.triage import TriageRunOptions, resolve_sources, run_todo, run_triage
+from .config import DEFAULT_USER_CONFIG, StarTriageConfig, load_config, resolve_team_name
+from .dates import parse_interval, triage_task_date_range
+from .enums import UpdateFilter
+from .log import log_setup
+from .output import OutputConfig, OutputFormat
+from .savebugs import BugPersistor, SaveConfig
+from .source import TaskFilterOptions
+from .triage import resolve_sources, run_todo, run_triage
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -52,11 +52,17 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--fullurls", action="store_true", help="Show full URLs instead of hyperlinks")
 
     # Shared parent parser for subcommands that support --markdown output
-    markdown_p = argparse.ArgumentParser(add_help=False)
-    markdown_p.add_argument(
+    output_p = argparse.ArgumentParser(add_help=False)
+    output_p.add_argument(
         "--markdown",
         metavar="PATH",
         help="Write parallel markdown output to PATH (for Discourse post template)",
+    )
+    output_p.add_argument(
+        "--format",
+        choices=OutputFormat,
+        default=OutputFormat.TERMINAL,
+        help="Output format (default: %(default)s)",
     )
 
     taskfilter_p = argparse.ArgumentParser(add_help=False)
@@ -83,6 +89,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     taskfilter_p.add_argument(
+        "-s",
         "--source",
         default=None,
         metavar="SOURCE[,SOURCE]",
@@ -131,7 +138,7 @@ GREEN = done
     triage_p = sp.add_parser(
         "triage",
         help="Daily triage",
-        parents=[markdown_p, taskfilter_p, list_p],
+        parents=[output_p, taskfilter_p, list_p],
     )
     triage_p.add_argument("--no-expiration", action="store_true", help="Skip expiring bugs subsection")
     triage_p.add_argument(
@@ -154,7 +161,7 @@ GREEN = done
     triage_p.set_defaults(func=_run_triage)
 
     # --- todo ---
-    todo_p = sp.add_parser("todo", help="Tagged bug housekeeping", parents=[markdown_p, taskfilter_p, list_p])
+    todo_p = sp.add_parser("todo", help="Tagged bug housekeeping", parents=[output_p, taskfilter_p, list_p])
     todo_p.add_argument(
         "--subscribed",
         action="store_true",
@@ -183,24 +190,30 @@ GREEN = done
     return parser
 
 
-def _make_opts(args: argparse.Namespace) -> TriageRunOptions:
+def _filter_from_args(
+    config: StarTriageConfig, args: argparse.Namespace, source_filter: set[str] | None = None
+) -> TaskFilterOptions:
     # mutually exclusive options in parser
     if args.triage_day:
         start, end = triage_task_date_range(args.triage_day)
     else:
         start, end = parse_interval(args.interval)
 
-    age = datetime.now(timezone.utc) - timedelta(days=args.flag_recent)
-    old = datetime.now(timezone.utc) - timedelta(days=args.flag_old)
-    return TriageRunOptions(
+    recent_since: datetime = datetime.now(timezone.utc) - timedelta(days=args.flag_recent)
+    old_since: datetime = datetime.now(timezone.utc) - timedelta(days=args.flag_old)
+    team_name = resolve_team_name(args.team, config)
+
+    update_filter = getattr(args, "update", None)  # only for triage command
+
+    return TaskFilterOptions(
+        team=team_name,
         start=start,
         end=end,
-        sources=resolve_sources(args.source),
+        recent_since=recent_since,
+        old_since=old_since,
+        sources=resolve_sources(args.source, source_filter),
         show_expiration=not getattr(args, "no_expiration", False),
-        markdown_path=Path(args.markdown) if args.markdown else None,
-        update_filter=getattr(args, "update", None),
-        age=age,
-        old=old,
+        update_filter=update_filter,
     )
 
 
@@ -223,8 +236,8 @@ async def _run() -> None:
 
 
 async def _run_triage(args: argparse.Namespace, config: StarTriageConfig) -> None:
-    team_name = resolve_team_name(args.team, config)
-    team = config.get_team(team_name)
+    opts = _filter_from_args(config, args)
+    team = config.get_team(opts.team)
     if args.no_ignore_list:
         team = team.model_copy(update={"lp_ignore_packages": []})
 
@@ -235,28 +248,20 @@ async def _run_triage(args: argparse.Namespace, config: StarTriageConfig) -> Non
         general = general.model_copy(update={"lp_expire": args.expire})
 
     output_cfg = OutputConfig(
-        fmt=OutputFormat.TERMINAL,
+        fmt=args.format,
         out=sys.stdout,
         open_in_browser=args.open_in_browser,
         terminal_links=not args.fullurls,
+        markdown_path=Path(args.markdown) if args.markdown else None,
     )
-    await run_triage(team_name, team, general, _make_opts(args), output_cfg=output_cfg)
+    await run_triage(config, opts, output_cfg)
 
 
 async def _run_todo(args: argparse.Namespace, config: StarTriageConfig) -> None:
     if args.flag_recent is None and not args.subscribed:
         args.flag_recent = 6  # default flag-recent for todo mode
-    opts = dataclasses.replace(
-        _make_opts(args),
-        sources=frozenset(["launchpad", "github"]),
-    )
 
-    output_cfg = OutputConfig(
-        fmt=OutputFormat.TERMINAL,
-        out=sys.stdout,
-        open_in_browser=args.open_in_browser,
-        terminal_links=not args.fullurls,
-    )
+    opts = _filter_from_args(config, args, source_filter={"launchpad", "github"})
 
     save_cfg = SaveConfig(
         savebugs_dir=Path(args.save_bugs_dir) if args.save_bugs_dir else config.general.savebugs_dir,
@@ -265,12 +270,19 @@ async def _run_todo(args: argparse.Namespace, config: StarTriageConfig) -> None:
         no_save=args.no_save,
     )
 
+    output_cfg = OutputConfig(
+        fmt=args.format,
+        out=sys.stdout,
+        open_in_browser=args.open_in_browser,
+        terminal_links=not args.fullurls,
+        bug_persistor=BugPersistor(save_cfg),
+        markdown_path=Path(args.markdown) if args.markdown else None,
+    )
+
     await run_todo(
-        args.team,
         config,
         opts,
         output_cfg=output_cfg,
-        save_cfg=save_cfg,
         subscribed=args.subscribed,
     )
 

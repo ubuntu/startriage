@@ -1,4 +1,4 @@
-"""Async GitHub API fetcher."""
+"""GitHub API fetcher."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import logging
 import os
 import subprocess
 import urllib.parse
-from datetime import date, datetime
+from datetime import datetime
 
 import aiohttp
 
@@ -86,18 +86,17 @@ def _parse_next_link(link_header: str) -> str | None:
     return None
 
 
-def _in_range(dt: datetime | None, start: date | None, end: date | None) -> bool:
+def _in_range(dt: datetime | None, start: datetime | None, end: datetime | None) -> bool:
     if dt is None or start is None or end is None:
         return False
-    d = dt.date()
-    return start <= d <= end
+    return start <= dt <= end
 
 
 async def fetch_repo(
     session: aiohttp.ClientSession,
     repo: str,
-    start: date | None,
-    end: date | None,
+    start: datetime | None,
+    end: datetime | None,
     labels: list[str] | None = None,
 ) -> RepoResult:
     """Fetch PRs and Issues for one repo updated within [start, end].

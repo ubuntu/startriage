@@ -62,8 +62,8 @@ default_team = "ubuntu-server"
 lp_team = "ubuntu-server"
 lp_todo_tag = "server-todo"
 lp_ignore_packages = ["linux", "linux-meta"]
-discourse_categories = "Server"
-discourse_triage_category_id = 475  # suppress triage-post main entries; show replies only
+discourse_categories = ["project/server"]
+discourse_triage_categories = ["project/server/server-triage"]  # suppress triage-post main entries; show replies only
 github_repos = ["canonical/ubuntu-server-documentation"]
 ```
 

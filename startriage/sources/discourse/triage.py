@@ -7,14 +7,17 @@ import io
 import logging
 import webbrowser
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime
 from enum import Enum
 from pathlib import Path
 
 import aiohttp
 
-from startriage.output import OutputConfig, OutputFormat, TriageOutput, hyperlink
-
+from ...config import StarTriageConfig
+from ...enums import FetchMode
+from ...output import OutputConfig, OutputFormat, TriageResult, hyperlink
+from ...savebugs import BugPersistor
+from ...source import TaskFilterOptions
 from .finder import DiscourseFinder
 from .models import DiscourseCategory, DiscoursePost, DiscourseTopic
 
@@ -57,7 +60,7 @@ def _set_relevant(meta: PostWithMetadata) -> bool:
 
 
 def _topic_is_relevant(
-    topic: DiscourseTopic, start: datetime, end: datetime, triage_category_id: int | None
+    topic: DiscourseTopic, start: datetime, end: datetime, triage_category_ids: set[int]
 ) -> bool:
     """Return True if *topic* has at least one new/updated post in [start, end)."""
     posts = topic.get_posts()
@@ -65,7 +68,8 @@ def _topic_is_relevant(
         return False
     meta_list = [_create_post_meta(p, start, end, "") for p in posts]
     # ignore the team's triage posts, but consider replies to them.
-    is_triage = triage_category_id is not None and topic.get_category_id() == triage_category_id
+    cat_id = topic.get_category_id()
+    is_triage = cat_id is not None and cat_id in triage_category_ids
     if is_triage:
         for m in meta_list:
             if m.post.is_main_post_for_topic():
@@ -81,16 +85,15 @@ class CategoryResult:
 
 
 @dataclass
-class DiscourseTriage(TriageOutput):
+class DiscourseTriage(TriageResult):
     """Holds all fetched Discourse results for one triage run."""
 
     finder: DiscourseFinder  # api access
-    results: list[CategoryResult] = field(default_factory=list)
-    start: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    end: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    filter: TaskFilterOptions
+    results: list[CategoryResult]
     site: str | None = None
     had_updates: bool = False
-    triage_category_id: int | None = None
+    triage_category_ids: set[int] = field(default_factory=set)
 
     def _count_relevant_topics(self) -> int:
         """Count topics across all categories that have new/updated posts."""
@@ -98,7 +101,7 @@ class DiscourseTriage(TriageOutput):
             1
             for result in self.results
             for topic in result.category.get_topics()
-            if _topic_is_relevant(topic, self.start, self.end, self.triage_category_id)
+            if _topic_is_relevant(topic, self.filter.start, self.filter.end, self.triage_category_ids)
         )
 
     async def print_section(
@@ -133,10 +136,10 @@ class DiscourseTriage(TriageOutput):
             logging.info("Comments belonging to the %s category:", result.category_name)
             await self._print_category_comments(
                 result.category,
-                self.start,
-                self.end,
+                self.filter.start,
+                self.filter.end,
                 cfg,
-                triage_category_id=self.triage_category_id,
+                triage_category_ids=self.triage_category_ids,
             )
 
     async def write_markdown(self, path: Path) -> None:
@@ -149,6 +152,9 @@ class DiscourseTriage(TriageOutput):
 
         with path.open("a", encoding="utf-8") as fh:
             fh.write(buf.getvalue())
+
+    async def record(self, persistor: BugPersistor) -> None:
+        pass  # no bugs to record, just forum comments
 
     @staticmethod
     def _content_preview(post: DiscoursePost, max_len: int = 50) -> str:
@@ -259,7 +265,7 @@ class DiscourseTriage(TriageOutput):
         start: datetime,
         end: datetime,
         cfg: OutputConfig,
-        triage_category_id: int | None = None,
+        triage_category_ids: set[int] | None = None,
     ) -> None:
 
         relevant_topics = []
@@ -271,7 +277,10 @@ class DiscourseTriage(TriageOutput):
             ]
 
             # Topics in the triage category: ignore main-post updates, show replies only.
-            is_triage = triage_category_id is not None and topic.get_category_id() == triage_category_id
+            cat_id = topic.get_category_id()
+            is_triage = (
+                triage_category_ids is not None and cat_id is not None and cat_id in triage_category_ids
+            )
             if is_triage:
                 for m in posts:
                     if m.post.is_main_post_for_topic():
@@ -331,33 +340,51 @@ class DiscourseTriage(TriageOutput):
 
 
 async def find(
-    session: aiohttp.ClientSession,
-    category_names: str,
-    start: datetime,
-    end: datetime,
-    site: str | None = None,
-    tag: str | None = None,
-    triage_category_id: int | None = None,
+    config: StarTriageConfig,
+    filter: TaskFilterOptions,
+    mode: FetchMode,
 ) -> DiscourseTriage:
     """Fetch all Discourse data for the given categories and date range."""
-    finder = DiscourseFinder(site)
 
-    triage = DiscourseTriage(
-        finder=finder, start=start, end=end, site=site, triage_category_id=triage_category_id
-    )
+    team_config = config.get_team(filter.team)
 
-    for category_name in [c.strip() for c in category_names.split(",")]:
-        category = await finder.get_category_by_name(session, category_name)
-        if category is None:
-            logging.warning("Unable to find category: %s", category_name)
-            continue
+    site: str | None = None
+    tag: str | None = None
 
-        await finder.add_topics_to_category(session, category, start, site)
+    async with aiohttp.ClientSession() as session:
+        finder = DiscourseFinder(site)
 
-        # Fetch all topic posts concurrently
-        topics = [t for t in category.get_topics() if tag is None or t.has_tag(tag)]
-        await asyncio.gather(*[finder.add_posts_to_topic(session, t) for t in topics])
+        # Resolve triage category names → IDs
+        resolved_triage_ids: set[int] = set()
+        for cat_name in team_config.discourse_triage_categories:
+            cat = await finder.get_category_by_name(session, cat_name.strip())
+            cat_id = cat.get_id() if cat is not None else None
+            if cat_id is not None:
+                resolved_triage_ids.add(cat_id)
+            else:
+                logging.warning("Unable to find triage category: %s", cat_name)
 
-        triage.results.append(CategoryResult(category_name, category, site))
+        results: list[CategoryResult] = []
+        for category_name in [c.strip() for c in team_config.discourse_categories]:
+            category = await finder.get_category_by_name(session, category_name)
+            if category is None:
+                logging.warning("Unable to find category: %s", category_name)
+                continue
 
-    return triage
+            await finder.add_topics_to_category(
+                session, category, ignore_before=filter.start, ignore_after=filter.end, site=site
+            )
+
+            # Fetch all topic posts concurrently
+            topics = [t for t in category.get_topics() if tag is None or t.has_tag(tag)]
+            await asyncio.gather(*[finder.add_posts_to_topic(session, t) for t in topics])
+
+            results.append(CategoryResult(category_name, category, site))
+
+        return DiscourseTriage(
+            finder=finder,
+            filter=filter,
+            site=site,
+            triage_category_ids=resolved_triage_ids,
+            results=results,
+        )

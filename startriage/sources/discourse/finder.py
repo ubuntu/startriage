@@ -1,4 +1,4 @@
-"""Async Discourse API fetcher."""
+"""Discourse API fetcher."""
 
 from __future__ import annotations
 
@@ -142,11 +142,12 @@ class DiscourseFinder:
         session: aiohttp.ClientSession,
         category: DiscourseCategory,
         ignore_before: datetime | None = None,
+        ignore_after: datetime | None = None,
         site: str | None = None,
     ) -> None:
         """Recursively fetch all topics for a category, stopping at old topics."""
         url = self._CATEGORY_TOPIC_LIST_URL.format(site=self._site, id=category.get_id())
-        await self._add_topics_from_url(session, category, url, ignore_before, site)
+        await self._add_topics_from_url(session, category, url, ignore_before, ignore_after, site)
 
     async def _add_topics_from_url(
         self,
@@ -154,6 +155,7 @@ class DiscourseFinder:
         category: DiscourseCategory,
         url: str,
         ignore_before: datetime | None,
+        ignore_after: datetime | None,
         site: str | None,
     ) -> None:
         data = await self._get_json(session, url)
@@ -164,15 +166,17 @@ class DiscourseFinder:
         for t in topic_list.get("topics", []):
             topic = DiscourseTopic(t)
             update_time = topic.get_latest_update_time()
-            if ignore_before is None or update_time is None or update_time >= ignore_before:
+            too_old = ignore_before is not None and update_time is not None and update_time < ignore_before
+            too_new = ignore_after is not None and update_time is not None and update_time >= ignore_after
+            if not too_old and not too_new:
                 category.add_topic(topic)
-            elif not topic.get_pinned():
+            elif too_old and not topic.get_pinned():
                 return  # topics are date-ordered; stop early
 
         if "more_topics_url" in topic_list:
             raw_next = topic_list["more_topics_url"]
             next_url = f"{self._site}{'.json?'.join(raw_next.split('?'))}"
-            await self._add_topics_from_url(session, category, next_url, ignore_before, site)
+            await self._add_topics_from_url(session, category, next_url, ignore_before, ignore_after, site)
 
     async def get_editor_name(self, session: aiohttp.ClientSession, post: DiscoursePost) -> str | None:
         """Fetch the display name of the most recent editor of a main post."""

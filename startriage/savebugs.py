@@ -23,7 +23,7 @@ class SaveConfig:
     no_save: bool
 
 
-def _parse_compare(data: object) -> dict[str, list[str]]:
+def _parse_compare(data: object) -> dict[str, set[str]]:
     """Return per-source ID lists from a compare-file payload.
 
     Backward-compatible: a plain list is treated as launchpad bug numbers.
@@ -31,10 +31,10 @@ def _parse_compare(data: object) -> dict[str, list[str]]:
     if data is None:
         return {}
     if isinstance(data, list):
-        return {"launchpad": [str(x) for x in data]}
+        return {"launchpad": {str(x) for x in data}}
     if isinstance(data, dict):
         return {
-            str(k): [str(x) for x in v] for k, v in data.items() if k != "version" and isinstance(v, list)
+            str(k): {str(x) for x in v} for k, v in data.items() if k != "version" and isinstance(v, list)
         }
     return {}
 
@@ -87,16 +87,16 @@ class BugPersistor:
         else:
             previous_items = None
 
-        self._previous_items: dict[str, list[str]] = _parse_compare(previous_items)
-        self._pending: dict[str, list[str]] = {}  # source → recorded IDs
+        self._previous_items: dict[str, set[str]] = _parse_compare(previous_items)
+        self._pending: dict[str, set[str]] = {}  # source → recorded IDs
 
-    def former_bugs(self, source: str) -> list[str]:
-        """Return the list of IDs from the compare file for *source*."""
-        return self._previous_items.get(source, [])
+    def former_bugs(self, source: str) -> set[str]:
+        """Return the set of IDs from the compare file for *source*."""
+        return set(self._previous_items.get(source, []))
 
-    def record(self, source: str, ids: list[str]) -> None:
+    def record(self, source: str, ids: set[str]) -> None:
         """Accumulate *ids* for *source* (may be called multiple times)."""
-        self._pending.setdefault(source, []).extend(ids)
+        self._pending.setdefault(source, set()).update(ids)
 
     def save(self) -> None:
         """Write the combined save file (no-op when saving is disabled)."""
@@ -108,7 +108,7 @@ class BugPersistor:
         for source, ids in self._previous_items.items():
             if source not in self._pending:
                 payload[source] = ids
-        payload.update(self._pending)
+        payload.update({k: list(v) for k, v in self._pending.items()})
 
         with self._save_path.open("w", encoding="utf-8") as fh:
             yaml.dump(payload, stream=fh)
@@ -124,3 +124,12 @@ class BugPersistor:
     def no_save(self) -> bool:
         """Return True if saving is disabled."""
         return self._cfg.no_save
+
+    @property
+    def compare_str(self) -> str:
+        """Return a human-friendly description of the compare source."""
+        if self._cfg.override_compare:
+            return f"compare file {self._cfg.override_compare}"
+        if self._cfg.savebugs_dir:
+            return f"latest save in {self._cfg.savebugs_dir}"
+        return "(no compare source)"

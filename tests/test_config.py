@@ -49,7 +49,7 @@ def test_team_override_replaces_ignore_list(tmp_path):
         lp_team = "ubuntu-server"
         lp_todo_tag = "server-todo"
         lp_ignore_packages = []
-        discourse_categories = "project/server"
+        discourse_categories = ["project/server"]
         github_repos = []
     """,
     )
@@ -65,7 +65,7 @@ def test_custom_team_added(tmp_path):
         lp_team = "ubuntu-desktop"
         lp_todo_tag = "desktop-todo"
         lp_ignore_packages = []
-        discourse_categories = "desktop"
+        discourse_categories = ["desktop"]
         github_repos = []
     """,
     )

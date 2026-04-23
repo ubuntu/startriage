@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import StrEnum, auto
 
 
@@ -11,7 +11,7 @@ def _parse_dt(s: str | None) -> datetime | None:
     if not s:
         return None
     try:
-        return datetime.strptime(s, "%Y-%m-%dT%H:%M:%SZ")
+        return datetime.strptime(s, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
     except ValueError:
         return None
 
@@ -79,6 +79,10 @@ class GithubItemEntry:
     url: str
     repo: str
     item: Issue | PullRequest
+
+    @property
+    def key(self) -> str:
+        return f"{self.repo}#{self.item.number}"
 
 
 @dataclass

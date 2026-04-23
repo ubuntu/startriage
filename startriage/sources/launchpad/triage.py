@@ -7,37 +7,32 @@ import dataclasses
 import io
 import json
 import logging
-import shlex
 import webbrowser
 from dataclasses import dataclass, field
-from datetime import date, datetime
 from pathlib import Path
 
 import aiohttp
 from launchpadlib.launchpad import Launchpad
 
-from startriage.config import GeneralConfig, TeamConfig
-from startriage.enums import FetchMode
-from startriage.output import OutputConfig, OutputFormat, TriageOutput, hyperlink, truncate_string
-from startriage.savebugs import BugPersistor
-
+from ...config import GeneralConfig, StarTriageConfig, TeamConfig
+from ...enums import FetchMode
+from ...output import OutputConfig, OutputFormat, TriageResult, hyperlink, truncate_string
+from ...savebugs import BugPersistor
+from ...source import TaskFilterOptions
 from .finder import connect_launchpad, fetch_bugs, fetch_unapproved_bugs_for_series
 from .models import LaunchpadTasks, RenderContext, Task
 
 
 @dataclass
-class LaunchpadTriage(TriageOutput):
+class LaunchpadTriage(TriageResult):
     """Holds all fetched Launchpad results for one triage run."""
 
     tasks: LaunchpadTasks
-    start: date | None
-    end: date | None
+    filter: TaskFilterOptions
     team_config: TeamConfig
     config: GeneralConfig
     mode: FetchMode = FetchMode.triage
     unapproved_cache: dict[tuple[str, str], bool] = field(default_factory=dict)
-    age: datetime | None = None
-    old: datetime | None = None
 
     @property
     def had_updates(self) -> bool:
@@ -46,13 +41,9 @@ class LaunchpadTriage(TriageOutput):
     async def print_section(
         self,
         cfg: OutputConfig,
-        *,
-        extended: bool | None = None,
-        bug_persistor: BugPersistor | None = None,
     ) -> None:
         """Show launchpad items."""
-        if extended is None:
-            extended = self.config.lp_extended
+        extended = self.config.lp_extended
 
         bug_count = len({t.number for t in self.tasks.tasks})
 
@@ -62,11 +53,11 @@ class LaunchpadTriage(TriageOutput):
                 print(f"## Launchpad ({bug_count} {plural})", file=cfg.out)
                 match self.mode:
                     case FetchMode.triage:
-                        print("filter: recently updated\n", file=cfg.out)
+                        print("filter: recently updated", file=cfg.out)
                     case FetchMode.todo:
-                        print(f"filter: tag={self.team_config.lp_todo_tag}\n", file=cfg.out)
+                        print(f"filter: tag={self.team_config.lp_todo_tag}", file=cfg.out)
                     case FetchMode.subscribed:
-                        print(f"filter: subscribed={self.team_config.lp_team}\n", file=cfg.out)
+                        print(f"filter: subscribed={self.team_config.lp_team}", file=cfg.out)
                     case _:
                         raise NotImplementedError(f"{self.mode!r}")
             case OutputFormat.MARKDOWN:
@@ -81,8 +72,8 @@ class LaunchpadTriage(TriageOutput):
             nowork_statuses=self.tasks.nowork_statuses,
             open_statuses=self.tasks.open_statuses,
             unapproved_cache=self.unapproved_cache,
-            age=self.age,
-            old=self.old,
+            recent_since=self.filter.recent_since,
+            old_since=self.filter.old_since,
         )
         await _print_bugs(
             self.tasks.lp,
@@ -90,11 +81,8 @@ class LaunchpadTriage(TriageOutput):
             ctx,
             cfg,
             extended,
-            bug_persistor,
             order_by_date=(self.mode == FetchMode.subscribed),
         )
-        if bug_persistor is not None:
-            bug_persistor.save()
 
         if self.mode == FetchMode.triage:
             await _print_old_bugs(
@@ -114,21 +102,19 @@ class LaunchpadTriage(TriageOutput):
         with path.open("a", encoding="utf-8") as fd:
             fd.write(buf.getvalue())
 
+    async def record(self, persistor: BugPersistor) -> None:
+        ids = {t.number for t in self.tasks.tasks}
+        persistor.record("launchpad", ids)
+
     def to_json(self) -> str:
         ctx = RenderContext(
             nowork_statuses=self.tasks.nowork_statuses,
             open_statuses=self.tasks.open_statuses,
             unapproved_cache=self.unapproved_cache,
-            age=self.age,
-            old=self.old,
+            recent_since=self.filter.recent_since,
+            old_since=self.filter.old_since,
         )
         return json.dumps([t.to_dict(ctx) for t in self.tasks.tasks], indent=4, default=str)
-
-
-def _load_former_bugs(bug_persistor: BugPersistor | None) -> list[str]:
-    if bug_persistor is None:
-        return []
-    return bug_persistor.former_bugs("launchpad")
 
 
 async def _print_bugs(
@@ -137,13 +123,13 @@ async def _print_bugs(
     ctx: RenderContext,
     cfg: OutputConfig,
     extended: bool,
-    bug_persistor: BugPersistor | None = None,
     order_by_date: bool = False,
     is_sorted: bool = False,
-    former_bugs: list[str] | None = None,
+    former_bugs: set[str] | None = None,
 ) -> None:
-    if former_bugs is None:
-        former_bugs = _load_former_bugs(bug_persistor)
+
+    if cfg.bug_persistor and former_bugs is None:
+        former_bugs = cfg.bug_persistor.former_bugs("launchpad")
 
     if is_sorted:
         sorted_tasks = tasks
@@ -174,7 +160,7 @@ async def _print_bugs(
         group = sorted(groups[number], key=lambda t: t.actionability_rank(ctx))
         primary, further_tasks = group[0], group[1:]
 
-        newbug = bool(bug_persistor and bug_persistor.compare_path and number not in former_bugs)
+        newbug = bool(former_bugs and number not in former_bugs)
 
         match cfg.fmt:
             case OutputFormat.MARKDOWN:
@@ -213,24 +199,19 @@ async def _print_bugs(
     if cfg.fmt == OutputFormat.TERMINAL:
         print(file=cfg.out)  # blank line after bugs for visual separation
 
-    if bug_persistor is not None and not bug_persistor.no_save:
-        bug_persistor.record("launchpad", reported)
-        # flush() is called by print_section after this returns
-
-    if bug_persistor is not None and bug_persistor.compare_path:
-        closed = [x for x in former_bugs if x not in reported]
-        print(f"\nBugs gone compared with {shlex.quote(str(bug_persistor.compare_path))}:", file=cfg.out)
-        gone_cfg = dataclasses.replace(cfg, open_in_browser=False)
-        await _print_bugs(
-            lp,
-            _bugs_to_tasks(closed, lp),
-            ctx,
-            gone_cfg,
-            extended,
-            None,
-            is_sorted=True,
-            former_bugs=former_bugs,
-        )
+        if former_bugs and cfg.bug_persistor:
+            closed = [x for x in former_bugs if x not in reported]
+            print(f"\nBugs gone compared with {cfg.bug_persistor.compare_str}:", file=cfg.out)
+            gone_cfg = dataclasses.replace(cfg, open_in_browser=False)
+            await _print_bugs(
+                lp,
+                _bugs_to_tasks(closed, lp),
+                ctx,
+                gone_cfg,
+                extended,
+                is_sorted=True,
+                former_bugs=former_bugs,
+            )
 
 
 def _bugs_to_tasks(bug_numbers: list[str], lp: Launchpad) -> list[Task]:
@@ -289,18 +270,14 @@ async def _print_old_bugs(
 
 
 async def find(
-    team_config: TeamConfig,
-    general_config: GeneralConfig,
-    start_date: date | None,
-    end_date: date | None,
-    mode: FetchMode = FetchMode.triage,
-    update_filter: str | None = None,
-    age: datetime | None = None,
-    old: datetime | None = None,
-    show_expiration: bool = True,
+    config: StarTriageConfig,
+    filter: TaskFilterOptions,
+    mode: FetchMode,
 ) -> LaunchpadTriage:
-    """Fetch Launchpad bugs, then bulk-check unapproved queue concurrently."""
-    effective_update_filter = update_filter or general_config.lp_triage_updates
+    """Fetch Launchpad bugs."""
+    effective_update_filter = filter.update_filter or config.general.lp_triage_updates
+
+    team_config = config.get_team(filter.team)
 
     logging.info("Fetching Launchpad bugs (this may take a while)…")
     lp = connect_launchpad()
@@ -308,13 +285,11 @@ async def find(
         fetch_bugs,
         lp,
         team_config,
-        start_date,
-        end_date,
+        filter,
         mode,
         effective_update_filter,
-        show_expiration and mode == FetchMode.triage,
-        general_config.lp_expire_tagged,
-        general_config.lp_expire,
+        config.general.lp_expire_tagged,
+        config.general.lp_expire,
     )
     logging.info("Launchpad: %d bugs fetched. Checking unapproved queue…", len(lp_tasks.tasks))
 
@@ -328,14 +303,11 @@ async def find(
 
     triage = LaunchpadTriage(
         tasks=lp_tasks,
-        start=start_date,
-        end=end_date,
+        filter=filter,
         team_config=team_config,
-        config=general_config,
+        config=config.general,
         mode=mode,
         unapproved_cache=unapproved_cache,
-        age=age,
-        old=old,
     )
     logging.info("Launchpad: done.")
     return triage

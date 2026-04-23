@@ -13,6 +13,20 @@ def _d(s: str) -> datetime.date:
     return datetime.datetime.strptime(s, "%Y-%m-%d").date()
 
 
+def _dt_start(s: str) -> datetime.datetime:
+    """Midnight UTC on the given date -- the expected start of an interval."""
+    return datetime.datetime.combine(
+        _d(s), datetime.time.min, tzinfo=datetime.timezone.utc
+    )
+
+
+def _dt_end(s: str) -> datetime.datetime:
+    """Last microsecond of the given date UTC -- the expected end of an interval."""
+    return datetime.datetime.combine(
+        _d(s), datetime.time.max, tzinfo=datetime.timezone.utc
+    )
+
+
 # --- reverse_auto_date_range ---
 
 
@@ -43,81 +57,88 @@ def test_parse_interval_none_weekday():
     # Yesterday was a weekday: single day
     ref = datetime.date(2026, 4, 16)  # Thursday
     start, end = parse_interval(None, relative_to=ref)
-    assert start == end == datetime.date(2026, 4, 15)
+    assert start == _dt_start("2026-04-15")
+    assert end == _dt_end("2026-04-15")
 
 
 def test_parse_interval_none_monday():
     # Yesterday was Sunday: return full weekend Fri-Sun
     ref = datetime.date(2026, 4, 20)  # Monday (yesterday=Sunday)
     start, end = parse_interval(None, relative_to=ref)
-    yesterday = ref - datetime.timedelta(days=1)  # Sunday 2026-04-19
-    assert end == yesterday
-    assert start == yesterday - datetime.timedelta(days=2)  # Friday 2026-04-17
+    assert start == _dt_start("2026-04-17")  # Friday
+    assert end == _dt_end("2026-04-19")  # Sunday
 
 
 def test_parse_interval_single_date():
     start, end = parse_interval("2026-04-09")
-    assert start == end == datetime.date(2026, 4, 9)
+    assert start == _dt_start("2026-04-09")
+    assert end == _dt_end("2026-04-09")
 
 
 def test_parse_interval_range():
     start, end = parse_interval("2026-04-09:2026-04-11")
-    assert start == datetime.date(2026, 4, 9)
-    assert end == datetime.date(2026, 4, 11)
+    assert start == _dt_start("2026-04-09")
+    assert end == _dt_end("2026-04-11")
 
 
 def test_parse_interval_range_same():
     start, end = parse_interval("2026-12-09:2026-12-09")
-    assert start == datetime.date(2026, 12, 9)
-    assert end == datetime.date(2026, 12, 9)
+    assert start == _dt_start("2026-12-09")
+    assert end == _dt_end("2026-12-09")
 
 
 def test_parse_interval_day_name():
     # "tuesday" relative to a thursday means the most recent past Tuesday
     ref = datetime.date(2026, 4, 16)  # Thursday
     start, end = parse_interval("tuesday", relative_to=ref)
-    assert start == end == datetime.date(2026, 4, 14)  # most recent Tuesday
+    assert start == _dt_start("2026-04-14")  # most recent Tuesday
+    assert end == _dt_end("2026-04-14")
 
 
 def test_parse_interval_day_name_monday():
     # "monday" relative to a thursday means most recent past Monday
     ref = datetime.date(2026, 4, 16)  # Thursday
     start, end = parse_interval("monday", relative_to=ref)
-    assert start == end == datetime.date(2026, 4, 13)  # most recent Monday
+    assert start == _dt_start("2026-04-13")  # most recent Monday
+    assert end == _dt_end("2026-04-13")
 
 
 def test_parse_interval_friday():
     # "friday" relative to a friday means today (most recent Friday = today)
     ref = datetime.date(2026, 4, 17)  # Friday
     start, end = parse_interval("friday", relative_to=ref)
-    assert start == end == datetime.date(2026, 4, 17)  # today
+    assert start == _dt_start("2026-04-17")  # today
+    assert end == _dt_end("2026-04-17")
 
 
 def test_parse_interval_monday_from_tuesday():
     # "monday" from Tuesday: most recent Monday (yesterday)
     ref = datetime.date(2026, 4, 14)  # Tuesday
     start, end = parse_interval("monday", relative_to=ref)
-    assert start == end == datetime.date(2026, 4, 13)  # Monday
+    assert start == _dt_start("2026-04-13")  # Monday
+    assert end == _dt_end("2026-04-13")
 
 
 def test_parse_interval_yesterday():
     ref = datetime.date(2026, 4, 16)
     start, end = parse_interval("yesterday", relative_to=ref)
-    assert start == end == datetime.date(2026, 4, 15)
+    assert start == _dt_start("2026-04-15")
+    assert end == _dt_end("2026-04-15")
 
 
 def test_parse_interval_n_days_ago():
     ref = datetime.date(2026, 4, 16)
     start, end = parse_interval("3 days ago", relative_to=ref)
-    assert start == end == datetime.date(2026, 4, 13)
+    assert start == _dt_start("2026-04-13")
+    assert end == _dt_end("2026-04-13")
 
 
 def test_parse_interval_open_end():
     # "yesterday:" means from yesterday to today
     ref = datetime.date(2026, 4, 16)
     start, end = parse_interval("yesterday:", relative_to=ref)
-    assert start == datetime.date(2026, 4, 15)
-    assert end == ref
+    assert start == _dt_start("2026-04-15")
+    assert end == _dt_end("2026-04-16")
 
 
 def test_parse_interval_open_start_raises():
@@ -130,8 +151,8 @@ def test_parse_interval_friday_colon_monday():
     # "friday:monday" means from most recent Friday to most recent Monday
     ref = datetime.date(2026, 4, 14)  # Tuesday
     start, end = parse_interval("friday:monday", relative_to=ref)
-    assert start == datetime.date(2026, 4, 10)  # most recent Friday
-    assert end == datetime.date(2026, 4, 13)  # most recent Monday
+    assert start == _dt_start("2026-04-10")  # most recent Friday
+    assert end == _dt_end("2026-04-13")  # most recent Monday
 
 
 def test_parse_interval_reversed_range_raises():

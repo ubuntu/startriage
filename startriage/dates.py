@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import re
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 
-def triage_task_date_range(keyword: str, today: date | None = None) -> tuple[date, date]:
+def triage_task_date_range(keyword: str, today: date | None = None) -> tuple[datetime, datetime]:
     """Given a day-of-week keyword, calculate the inclusive triage date range.
 
     Monday triage covers the previous Friday, Saturday and Sunday.
@@ -35,11 +35,17 @@ def triage_task_date_range(keyword: str, today: date | None = None) -> tuple[dat
 
     if triage_day.weekday() == 0:
         # Monday triage: previous Fri-Sun
-        return triage_day - timedelta(days=3), triage_day - timedelta(days=1)
+        start = triage_day - timedelta(days=3)
+        end = triage_day - timedelta(days=1)
 
-    # Normal weekday triage: previous day only
-    prev = triage_day - timedelta(days=1)
-    return prev, prev
+    else:
+        # Normal weekday triage: previous day only
+        start = end = triage_day - timedelta(days=1)
+
+    start = datetime.combine(start, datetime.min.time()).replace(tzinfo=timezone.utc)
+    end = datetime.combine(end, datetime.max.time()).replace(tzinfo=timezone.utc)
+
+    return start, end
 
 
 def reverse_triage_task_day(start: date, end: date) -> str | None:
@@ -125,7 +131,7 @@ def _parse_single_date(token: str, relative_to: date | None = None) -> date:
     )
 
 
-def parse_interval(arg: str | None, relative_to: date | None = None) -> tuple[date, date]:
+def parse_interval(arg: str | None, relative_to: date | None = None) -> tuple[datetime, datetime]:
     """Parse a -i / --interval argument into an inclusive (start, end) date pair.
 
     Formats accepted:
@@ -144,10 +150,13 @@ def parse_interval(arg: str | None, relative_to: date | None = None) -> tuple[da
     if arg is None:
         yesterday = ref - timedelta(days=1)
         if yesterday.weekday() == 6:  # Sunday → include friday + full weekend
-            return yesterday - timedelta(days=2), yesterday
-        return yesterday, yesterday
+            start = yesterday - timedelta(days=2)
+            end = yesterday
+        else:
+            start = yesterday
+            end = yesterday
 
-    if ":" in arg:
+    elif ":" in arg:
         left, right = [component.strip() for component in arg.split(":", 1)]
         if not left:
             raise ValueError("Start date is required before ':'")
@@ -155,11 +164,15 @@ def parse_interval(arg: str | None, relative_to: date | None = None) -> tuple[da
         end = _parse_single_date(right, ref) if right.strip() else ref
         if end < start:
             raise ValueError(f"End date {end} is before start date {start}")
-        return start, end
 
-    # Single date or day name → single-day range
-    d = _parse_single_date(arg, ref)
-    return d, d
+    else:
+        # Single date or day name → single-day range
+        start = end = _parse_single_date(arg, ref)
+
+    start = datetime.combine(start, datetime.min.time()).replace(tzinfo=timezone.utc)
+    end = datetime.combine(end, datetime.max.time()).replace(tzinfo=timezone.utc)
+
+    return start, end
 
 
 def compact_date_range(start: date, end: date) -> str:
