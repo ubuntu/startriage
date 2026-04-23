@@ -10,7 +10,6 @@ Ported from ustriage/task.py with these improvements:
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from functools import lru_cache
@@ -63,47 +62,45 @@ class Task:
     is NOT stored on this class -- it is passed via RenderContext to display methods.
     """
 
-    def __init__(self, lp_task=None) -> None:
-        self.subscribed: bool | None = None
-        self.last_activity_ours: bool | None = None
+    def __init__(
+        self, lp_task: Any, subscribed: bool, last_activity_ours: bool, expiring: bool = False
+    ) -> None:
+        self.subscribed: bool | None = subscribed
+        self.last_activity_ours: bool | None = last_activity_ours
+        self.expiring: bool = expiring
 
-        self.obj: Any
-        if lp_task:
-            parts = str(lp_task).split("/")
-            self.distro = parts[4]
-            self.source_package_name = parts[-3]
-            self.series = parts[5] if parts[5] != "+source" else "-devel"
-            self.obj = lp_task
-        else:
-            self.distro = None
-            self.source_package_name = None
-            self.series = None
-            self.obj = None
-
-    def __str__(self) -> str:
-        return f"LP #{self.number:8} {self.status:12} {self.title}"
-
-    @staticmethod
-    def create_from_launchpadlib_object(obj, **kwargs) -> Task:
-        self = Task()
-        self.obj = obj
-        parts = str(obj).split("/")
+        parts = str(lp_task).split("/")
         self.distro = parts[4]
         self.source_package_name = parts[-3]
         self.series = parts[5] if parts[5] != "+source" else "-devel"
-        for key, value in kwargs.items():
-            setattr(self, key, value)
-        return self
+        self.title: str = lp_task.title
+        self.number: str = self.title.split(" ")[1].replace("#", "")
+        self.status: str = lp_task.status
+        self.importance: str = lp_task.importance
+        self.src: str = self.title.split(" ")[3]
+        self.tags: list[str] = lp_task.bug.tags
+        self.date_last_updated = lp_task.bug.date_last_updated
+        if lp_task.assignee_link:
+            self.assignee: str | None = lp_task.assignee_link.split("~")[1]
+        else:
+            self.assignee = None
+        self.lp_task = lp_task
 
-    @property
-    @lru_cache(maxsize=None)  # noqa: B019
-    def number(self) -> str:
-        return self.title.split(" ")[1].replace("#", "")
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, Task):
+            return NotImplemented
+        return (
+            self.number == other.number
+            and self.src == other.src
+            and self.distro == other.distro
+            and self.series == other.series
+        )
 
-    @property
-    @lru_cache(maxsize=None)  # noqa: B019
-    def title(self) -> str:
-        return self.obj.title
+    def __hash__(self) -> int:
+        return hash((self.number, self.src, self.distro, self.series))
+
+    def __str__(self) -> str:
+        return f"LP #{self.number:8} {self.status:12} {self.title}"
 
     @property
     @lru_cache(maxsize=None)  # noqa: B019
@@ -124,40 +121,8 @@ class Task:
             DISTRIBUTION_SOURCE_PACKAGE_RESOURCE_TYPE_LINK: 5,
             SOURCE_PACKAGE_RESOURCE_TYPE_LINK: 6,
             PROJECT_RESOURCE_TYPE_LINK: 7,
-        }.get(self.obj.target.resource_type_link, 4)
+        }.get(self.lp_task.target.resource_type_link, 4)
         return " ".join(self.title.split(" ")[start_field:]).replace('"', "")
-
-    @property
-    @lru_cache(maxsize=None)  # noqa: B019
-    def src(self) -> str:
-        return self.title.split(" ")[3]
-
-    @property
-    @lru_cache(maxsize=None)  # noqa: B019
-    def status(self) -> str:
-        return self.obj.status
-
-    @property
-    @lru_cache(maxsize=None)  # noqa: B019
-    def importance(self) -> str:
-        return self.obj.importance
-
-    @property
-    @lru_cache(maxsize=None)  # noqa: B019
-    def tags(self) -> list[str]:
-        return self.obj.bug.tags
-
-    @property
-    @lru_cache(maxsize=None)  # noqa: B019
-    def assignee(self) -> str | None:
-        if self.obj.assignee_link:
-            return self.obj.assignee_link.split("~")[1]
-        return None
-
-    @property
-    @lru_cache(maxsize=None)  # noqa: B019
-    def date_last_updated(self):
-        return self.obj.bug.date_last_updated
 
     @property
     def url(self) -> str:
@@ -172,7 +137,7 @@ class Task:
     def _sibling_tasks(self) -> dict[str, Any]:
         """All sibling tasks for this package across series -- cached."""
         siblings = {}
-        for lp_task in self.obj.bug.bug_tasks:
+        for lp_task in self.lp_task.bug.bug_tasks:
             parts = str(lp_task).split("/")
             if parts[4] != "ubuntu":
                 continue
@@ -210,9 +175,7 @@ class Task:
                 char = mark(char, COLOR_STATUS_OPEN)
             info += char
 
-        printable_len = len(re.sub("[^A-Z]+", "", info))
-        if length > printable_len:
-            info += " " * (length - printable_len)
+        info = info.ljust(length)
         return info
 
     def get_flags(self, ctx: RenderContext, newbug: bool = False) -> str:
@@ -221,7 +184,7 @@ class Task:
         return (
             ("*" if self.subscribed else " ")
             + ("+" if not self.last_activity_ours else " ")
-            + ("U" if self._is_updated(ctx) else "O" if self._is_old(ctx) else " ")
+            + ("U" if self._is_updated(ctx) else "X" if self.expiring else "O" if self._is_old(ctx) else " ")
             + ("N" if newbug else " ")
             + (v_needed if self._is_verification_needed() else " ")
             + (v_done if self._is_verification_done() else " ")

@@ -18,7 +18,7 @@ from launchpadlib.launchpad import Launchpad
 
 from startriage.config import GeneralConfig, TeamConfig
 from startriage.enums import FetchMode
-from startriage.output import OutputConfig, OutputFormat, TriageOutput, hyperlink
+from startriage.output import OutputConfig, OutputFormat, TriageOutput, hyperlink, truncate_string
 from startriage.savebugs import BugPersistor
 
 from .finder import connect_launchpad, fetch_bugs, fetch_unapproved_bugs_for_series
@@ -33,7 +33,7 @@ class LaunchpadTriage(TriageOutput):
     start: date | None
     end: date | None
     team_config: TeamConfig
-    general_config: GeneralConfig
+    config: GeneralConfig
     mode: FetchMode = FetchMode.triage
     unapproved_cache: dict[tuple[str, str], bool] = field(default_factory=dict)
     age: datetime | None = None
@@ -52,7 +52,7 @@ class LaunchpadTriage(TriageOutput):
     ) -> None:
         """Show launchpad items."""
         if extended is None:
-            extended = self.general_config.lp_extended
+            extended = self.config.lp_extended
 
         bug_count = len({t.number for t in self.tasks.tasks})
 
@@ -85,7 +85,8 @@ class LaunchpadTriage(TriageOutput):
             old=self.old,
         )
         await _print_bugs(
-            self.tasks,
+            self.tasks.lp,
+            self.tasks.tasks,
             ctx,
             cfg,
             extended,
@@ -94,6 +95,17 @@ class LaunchpadTriage(TriageOutput):
         )
         if bug_persistor is not None:
             bug_persistor.save()
+
+        if self.mode == FetchMode.triage:
+            await _print_old_bugs(
+                self.tasks.lp,
+                self.tasks.expiring_tagged,
+                self.tasks.expiring_subscribed,
+                ctx,
+                cfg,
+                self.config,
+                extended,
+            )
 
     async def write_markdown(self, path: Path) -> None:
         """Append markdown-formatted output to a file."""
@@ -120,16 +132,16 @@ def _load_former_bugs(bug_persistor: BugPersistor | None) -> list[str]:
 
 
 async def _print_bugs(
-    lp_tasks: LaunchpadTasks,
+    lp: Launchpad,
+    tasks: list[Task],
     ctx: RenderContext,
     cfg: OutputConfig,
     extended: bool,
-    bug_persistor: BugPersistor | None,
+    bug_persistor: BugPersistor | None = None,
     order_by_date: bool = False,
     is_sorted: bool = False,
     former_bugs: list[str] | None = None,
 ) -> None:
-    tasks = lp_tasks.tasks
     if former_bugs is None:
         former_bugs = _load_former_bugs(bug_persistor)
 
@@ -167,7 +179,10 @@ async def _print_bugs(
         match cfg.fmt:
             case OutputFormat.MARKDOWN:
                 bug_link = hyperlink(primary.url, f"LP #{number}", cfg.fmt)
-                print(f"### {bug_link} {primary.src} \u2014 {primary.short_title}", file=cfg.out)
+                print(
+                    f"### {bug_link} {primary.src} \u2014 {truncate_string(primary.short_title, 80)}",
+                    file=cfg.out,
+                )
                 print(file=cfg.out)  # blank line as space for triager's report
 
             case OutputFormat.TERMINAL:
@@ -207,7 +222,8 @@ async def _print_bugs(
         print(f"\nBugs gone compared with {shlex.quote(str(bug_persistor.compare_path))}:", file=cfg.out)
         gone_cfg = dataclasses.replace(cfg, open_in_browser=False)
         await _print_bugs(
-            dataclasses.replace(lp_tasks, tasks=_bugs_to_tasks(closed, lp_tasks.lp)),
+            lp,
+            _bugs_to_tasks(closed, lp),
             ctx,
             gone_cfg,
             extended,
@@ -223,10 +239,53 @@ def _bugs_to_tasks(bug_numbers: list[str], lp: Launchpad) -> list[Task]:
     tasks = []
     for number in bug_numbers:
         for lp_task in lp.bugs[number].bug_tasks:
-            tasks.append(
-                Task.create_from_launchpadlib_object(lp_task, subscribed=False, last_activity_ours=False)
-            )
+            tasks.append(Task(lp_task, subscribed=False, last_activity_ours=False))
     return tasks
+
+
+async def _print_old_bugs(
+    lp: Launchpad,
+    expiring_tagged: list[Task],
+    expiring_subscribed: list[Task],
+    ctx: RenderContext,
+    out_cfg: OutputConfig,
+    config: GeneralConfig,
+    extended: bool,
+) -> None:
+    match out_cfg.fmt:
+        case OutputFormat.TERMINAL:
+            for label, exp_tasks, days, order_by_date in [
+                (
+                    "Expiring tagged",
+                    expiring_tagged,
+                    config.lp_expire_tagged,
+                    False,
+                ),
+                (
+                    "Expiring subscribed",
+                    expiring_subscribed,
+                    config.lp_expire,
+                    True,
+                ),
+            ]:
+                if not exp_tasks:
+                    continue
+
+                exp_count = len({t.number for t in exp_tasks})
+                print(file=out_cfg.out)
+                plural = "item" if exp_count == 1 else "items"
+                print(f"### {label} ({exp_count} {plural}, ~{days} days ago)", file=out_cfg.out)
+                await _print_bugs(lp, exp_tasks, ctx, out_cfg, extended, order_by_date=order_by_date)
+
+        case OutputFormat.MARKDOWN:
+            exp_tasks = list(set(expiring_tagged) | set(expiring_subscribed))
+            exp_count = len({t.number for t in exp_tasks})
+            plural = "item" if exp_count == 1 else "items"
+            print(f"### Old {plural}", file=out_cfg.out)
+            await _print_bugs(lp, exp_tasks, ctx, out_cfg, extended, order_by_date=True)
+
+        case _:
+            raise NotImplementedError
 
 
 async def find(
@@ -272,7 +331,7 @@ async def find(
         start=start_date,
         end=end_date,
         team_config=team_config,
-        general_config=general_config,
+        config=general_config,
         mode=mode,
         unapproved_cache=unapproved_cache,
         age=age,

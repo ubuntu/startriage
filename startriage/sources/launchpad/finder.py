@@ -248,7 +248,7 @@ def fetch_bugs(
             if update_filter == "ours" and not is_ours:
                 continue
 
-        task = Task.create_from_launchpadlib_object(
+        task = Task(
             lp_task,
             subscribed=is_subscribed,
             last_activity_ours=is_ours,
@@ -297,9 +297,7 @@ def fetch_bugs(
                 if src in team_config.lp_ignore_packages:
                     continue
                 is_ours = _last_activity_ours(lp_task, activity_links)
-                result.append(
-                    Task.create_from_launchpadlib_object(lp_task, subscribed=True, last_activity_ours=is_ours)
-                )
+                result.append(Task(lp_task, subscribed=True, last_activity_ours=is_ours, expiring=True))
             return result
 
         logging.info("Fetching expiring tagged bugs (~%d days ago)\u2026", expire_tagged_days)

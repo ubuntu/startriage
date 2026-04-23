@@ -6,7 +6,7 @@ import re
 from datetime import date, datetime, timedelta
 
 
-def auto_date_range(keyword: str, today: date | None = None) -> tuple[date, date]:
+def triage_task_date_range(keyword: str, today: date | None = None) -> tuple[date, date]:
     """Given a day-of-week keyword, calculate the inclusive triage date range.
 
     Monday triage covers the previous Friday, Saturday and Sunday.
@@ -42,7 +42,7 @@ def auto_date_range(keyword: str, today: date | None = None) -> tuple[date, date
     return prev, prev
 
 
-def reverse_auto_date_range(start: date, end: date) -> str | None:
+def reverse_triage_task_day(start: date, end: date) -> str | None:
     """Given an inclusive date range, return the triage day label if it matches a known pattern."""
     if start > end or (end - start).days > 2:
         return None
@@ -129,59 +129,46 @@ def parse_interval(arg: str | None, relative_to: date | None = None) -> tuple[da
     """Parse a -i / --interval argument into an inclusive (start, end) date pair.
 
     Formats accepted:
-      YYYY-MM-DD             → single day
-      YYYY-MM-DD:YYYY-MM-DD  → explicit range
-      monday / tuesday / ...  -> triage range for that weekday (Mon->Fri-Sun, else ->prev day)
-      yesterday / today / N days ago / last monday
-
+      YYYY-MM-DD               -> single day
+      YYYY-MM-DD:YYYY-MM-DD    -> explicit range
+      YYYY-MM-DD:              -> from that date to today
+      :YYYY-MM-DD              -> invalid (likely unintentional)
+      monday / tuesday / ...   -> changed on that day (most recent past occurrence)
+      friday:monday            -> changed between those two days
+      yesterday:today = yesterday:
 
     Default when arg is None: yesterday, or Fri-Sun if yesterday was Sunday.
     """
+    ref = relative_to or datetime.now().date()
+
     if arg is None:
-        yesterday = (relative_to or datetime.now().date()) - timedelta(days=1)
+        yesterday = ref - timedelta(days=1)
         if yesterday.weekday() == 6:  # Sunday → include friday + full weekend
             return yesterday - timedelta(days=2), yesterday
         return yesterday, yesterday
 
     if ":" in arg:
-        parts = arg.split(":", 1)
-        start = _parse_single_date(parts[0], relative_to)
-        end = _parse_single_date(parts[1], relative_to)
+        left, right = [component.strip() for component in arg.split(":", 1)]
+        if not left:
+            raise ValueError("Start date is required before ':'")
+        start = _parse_single_date(left, ref)
+        end = _parse_single_date(right, ref) if right.strip() else ref
         if end < start:
             raise ValueError(f"End date {end} is before start date {start}")
         return start, end
 
-    # Try as a day name → triage range
-    day_names_short = {
-        "monday",
-        "mon",
-        "tuesday",
-        "tue",
-        "wednesday",
-        "wed",
-        "thursday",
-        "thu",
-        "friday",
-        "fri",
-    }
-    if arg.strip().lower() in day_names_short:
-        try:
-            return auto_date_range(arg, relative_to)
-        except ValueError:
-            pass
-
-    # Single date or relative keyword → single-day range
-    d = _parse_single_date(arg, relative_to)
+    # Single date or day name → single-day range
+    d = _parse_single_date(arg, ref)
     return d, d
 
 
 def compact_date_range(start: date, end: date) -> str:
     """Return a compact date-range string.
 
-      single day               -> 2026-02-12
-      same year+month (list)   -> 2026-02-{12,13,14}
-      cross-month same year    -> 2026-[03-31,04-02]  (interval)
-      cross-year (interval)    -> [2025-12-31,2026-01-01]
+    single day               -> 2026-02-12
+    same year+month (list)   -> 2026-02-{12,13,14}
+    cross-month same year    -> 2026-[03-31,04-02]  (interval)
+    cross-year (interval)    -> [2025-12-31,2026-01-01]
     """
     if start == end:
         return start.strftime("%Y-%m-%d")

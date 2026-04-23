@@ -14,7 +14,7 @@ from pathlib import Path
 import tomli_w
 
 from startriage.config import DEFAULT_USER_CONFIG, StarTriageConfig, load_config, resolve_team_name
-from startriage.dates import parse_interval
+from startriage.dates import parse_interval, triage_task_date_range
 from startriage.enums import UpdateFilter
 from startriage.log import log_setup
 from startriage.output import OutputConfig, OutputFormat
@@ -60,7 +60,9 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     taskfilter_p = argparse.ArgumentParser(add_help=False)
-    taskfilter_p.add_argument(
+    interval_exclusive_group = taskfilter_p.add_mutually_exclusive_group()
+
+    interval_exclusive_group.add_argument(
         "-i",
         "--interval",
         default=None,
@@ -68,9 +70,18 @@ def _build_parser() -> argparse.ArgumentParser:
         help=(
             "Date interval to select only tasks changed on that day/inside the range: "
             "YYYY-MM-DD, YYYY-MM-DD:YYYY-MM-DD, "
-            "or a triage task day name (e.g. 'monday' => fri-sun, 'tuesday' => mon, ...)"
+            "or a relative date ('yesterday'). make open ended by ':', e.g. 'yesterday:'."
         ),
     )
+
+    interval_exclusive_group.add_argument(
+        "-t",
+        "--triage-day",
+        default=None,
+        metavar="DAY",
+        help=("Triage task day to deduce interval from. 'monday' -> fri,sa,sun. tuesday -> mon."),
+    )
+
     taskfilter_p.add_argument(
         "--source",
         default=None,
@@ -101,6 +112,7 @@ Terminal output — bug flags column (left to right):
   +  last activity NOT from the team (reply pending)
   U  updated recently (within --flag-recent days)
   O  old / dormant (beyond --flag-old days)
+  X  expiring (not seen in today's window, --expire-tagged/--expire days)
   N  new bug since last --compare file
   v  verification-needed-* tag set
   V  verification-done-* tag set
@@ -172,7 +184,12 @@ GREEN = done
 
 
 def _make_opts(args: argparse.Namespace) -> TriageRunOptions:
-    start, end = parse_interval(args.interval)
+    # mutually exclusive options in parser
+    if args.triage_day:
+        start, end = triage_task_date_range(args.triage_day)
+    else:
+        start, end = parse_interval(args.interval)
+
     age = datetime.now(timezone.utc) - timedelta(days=args.flag_recent)
     old = datetime.now(timezone.utc) - timedelta(days=args.flag_old)
     return TriageRunOptions(

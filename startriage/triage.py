@@ -12,7 +12,7 @@ from pathlib import Path
 import aiohttp
 
 from .config import GeneralConfig, StarTriageConfig, TeamConfig
-from .dates import compact_date_range, reverse_auto_date_range
+from .dates import compact_date_range, reverse_triage_task_day
 from .enums import FetchMode, UpdateFilter
 from .output import OutputConfig, OutputFormat, TriageOutput
 from .savebugs import BugPersistor, SaveConfig
@@ -129,7 +129,7 @@ async def run_triage(
         else:
             range_verbose = f"between {start} and {end} inclusive"
 
-        triage_task_name = reverse_auto_date_range(opts.start, opts.end)
+        triage_task_name = reverse_triage_task_day(opts.start, opts.end)
 
         if triage_task_name:
             triage_task_note = f' ("{triage_task_name}")'
@@ -147,7 +147,7 @@ async def run_triage(
             case OutputFormat.MARKDOWN:
                 print(f"Items updated {range_verbose}\n", file=output_cfg.out)
             case _:
-                 raise NotImplementedError
+                raise NotImplementedError
 
     # Track which sources are still being fetched (shared mutable state, safe in single-threaded asyncio)
     pending = set(fetch_tasks.keys())
@@ -159,12 +159,13 @@ async def run_triage(
         spinner.clear()
         spinner.suspend()  # prevent spinner redraws while section output is in progress
         try:
-            print(file=output_cfg.out)
             await result.print_section(output_cfg)
+            print(file=output_cfg.out)
         finally:
             spinner.resume()
         return source, result
 
+    print(file=output_cfg.out)
     async with Spinner(pending) as spinner:
         results = await asyncio.gather(
             *[_await_and_print(source, t, spinner) for source, t in fetch_tasks.items()]

@@ -6,50 +6,11 @@ import datetime
 
 import pytest
 
-from startriage.dates import auto_date_range, compact_date_range, parse_interval, reverse_auto_date_range
+from startriage.dates import compact_date_range, parse_interval, reverse_triage_task_day
 
 
 def _d(s: str) -> datetime.date:
     return datetime.datetime.strptime(s, "%Y-%m-%d").date()
-
-
-# --- auto_date_range ---
-
-
-@pytest.mark.parametrize(
-    "today,keyword,start,end",
-    [
-        ("2019-05-14", "mon", "2019-05-10", "2019-05-12"),
-        ("2019-05-14", "tue", "2019-05-13", "2019-05-13"),
-        ("2019-05-13", "tue", "2019-05-06", "2019-05-06"),
-        ("2019-05-14", "wed", "2019-05-07", "2019-05-07"),
-        # dsctriage variants (full names)
-        ("2019-05-14", "monday", "2019-05-10", "2019-05-12"),
-        ("2019-05-14", "tuesday", "2019-05-13", "2019-05-13"),
-        ("2019-05-14", "wednesday", "2019-05-07", "2019-05-07"),
-    ],
-)
-def test_auto_date_range(today, keyword, start, end):
-    assert auto_date_range(keyword, today=_d(today)) == (_d(start), _d(end))
-
-
-@pytest.mark.parametrize(
-    "today,keyword",
-    [
-        ("2019-05-14", "sun"),
-        ("2019-05-14", "sat"),
-        ("2019-05-14", "sunday"),
-        ("2019-05-14", "saturday"),
-    ],
-)
-def test_auto_date_range_weekend_raises(today, keyword):
-    with pytest.raises(ValueError):
-        auto_date_range(keyword, today=_d(today))
-
-
-def test_auto_date_range_bad_keyword():
-    with pytest.raises(ValueError):
-        auto_date_range("notaday")
 
 
 # --- reverse_auto_date_range ---
@@ -72,7 +33,7 @@ def test_auto_date_range_bad_keyword():
     ],
 )
 def test_reverse_auto_date_range(start, end, expected):
-    assert reverse_auto_date_range(_d(start), _d(end)) == expected
+    assert reverse_triage_task_day(_d(start), _d(end)) == expected
 
 
 # --- parse_interval ---
@@ -112,26 +73,31 @@ def test_parse_interval_range_same():
 
 
 def test_parse_interval_day_name():
-    # monday relative to a thursday should give fri-sun
+    # "tuesday" relative to a thursday means the most recent past Tuesday
+    ref = datetime.date(2026, 4, 16)  # Thursday
+    start, end = parse_interval("tuesday", relative_to=ref)
+    assert start == end == datetime.date(2026, 4, 14)  # most recent Tuesday
+
+
+def test_parse_interval_day_name_monday():
+    # "monday" relative to a thursday means most recent past Monday
     ref = datetime.date(2026, 4, 16)  # Thursday
     start, end = parse_interval("monday", relative_to=ref)
-    assert start == datetime.date(2026, 4, 10)
-    assert end == datetime.date(2026, 4, 12)
+    assert start == end == datetime.date(2026, 4, 13)  # most recent Monday
 
 
 def test_parse_interval_friday():
-    # Friday triage: show previous weekday (Thursday)
+    # "friday" relative to a friday means today (most recent Friday = today)
     ref = datetime.date(2026, 4, 17)  # Friday
     start, end = parse_interval("friday", relative_to=ref)
-    assert start == end == datetime.date(2026, 4, 16)  # Thursday
+    assert start == end == datetime.date(2026, 4, 17)  # today
 
 
 def test_parse_interval_monday_from_tuesday():
-    # Monday triage from Tuesday context: Fri-Sun of the previous week
+    # "monday" from Tuesday: most recent Monday (yesterday)
     ref = datetime.date(2026, 4, 14)  # Tuesday
     start, end = parse_interval("monday", relative_to=ref)
-    assert start == datetime.date(2026, 4, 10)  # Friday
-    assert end == datetime.date(2026, 4, 12)  # Sunday
+    assert start == end == datetime.date(2026, 4, 13)  # Monday
 
 
 def test_parse_interval_yesterday():
@@ -144,6 +110,28 @@ def test_parse_interval_n_days_ago():
     ref = datetime.date(2026, 4, 16)
     start, end = parse_interval("3 days ago", relative_to=ref)
     assert start == end == datetime.date(2026, 4, 13)
+
+
+def test_parse_interval_open_end():
+    # "yesterday:" means from yesterday to today
+    ref = datetime.date(2026, 4, 16)
+    start, end = parse_interval("yesterday:", relative_to=ref)
+    assert start == datetime.date(2026, 4, 15)
+    assert end == ref
+
+
+def test_parse_interval_open_start_raises():
+    # ":2026-04-16" (missing start) should raise
+    with pytest.raises(ValueError, match="Start date"):
+        parse_interval(":2026-04-16")
+
+
+def test_parse_interval_friday_colon_monday():
+    # "friday:monday" means from most recent Friday to most recent Monday
+    ref = datetime.date(2026, 4, 14)  # Tuesday
+    start, end = parse_interval("friday:monday", relative_to=ref)
+    assert start == datetime.date(2026, 4, 10)  # most recent Friday
+    assert end == datetime.date(2026, 4, 13)  # most recent Monday
 
 
 def test_parse_interval_reversed_range_raises():
