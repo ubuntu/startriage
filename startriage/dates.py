@@ -183,7 +183,7 @@ def compact_date_range(start: date, end: date) -> str:
     cross-month same year    -> 2026-[03-31,04-02]  (interval)
     cross-year (interval)    -> [2025-12-31,2026-01-01]
     """
-    if start == end:
+    if start.toordinal() == end.toordinal():
         return start.strftime("%Y-%m-%d")
 
     # Same year and month: enumerate every day as a list

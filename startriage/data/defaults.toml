@@ -31,3 +31,4 @@ github_repos = [
     "canonical/runc-stable",
 ]
 github_todo_label = "server-todo"
+proposed_migration_teams = ["ubuntu-server"]

@@ -13,12 +13,14 @@ from .source import TaskFilterOptions, TriageSource
 from .sources.discourse.triage import find as discourse_find
 from .sources.github.triage import find as github_find
 from .sources.launchpad.triage import find as launchpad_find
+from .sources.proposed.triage import find as proposed_find
 from .spinner import Spinner
 
 SOURCES = {
     "launchpad": TriageSource(name="launchpad", find=launchpad_find),
     "discourse": TriageSource(name="discourse", find=discourse_find),
     "github": TriageSource(name="github", find=github_find),
+    "proposed": TriageSource(name="proposed", find=proposed_find),
 }
 
 
@@ -95,8 +97,11 @@ async def run_triage(
             r = result_map[source]
             await r.write_markdown(output_cfg.markdown_path)
 
-        with output_cfg.markdown_path.open("a", encoding="utf-8") as fh:
-            fh.write("\n# Proposed Migration\n\n")
+        if "proposed" in result_map:
+            with output_cfg.markdown_path.open("a", encoding="utf-8") as fh:
+                fh.write("\n# Proposed Migration\n\n")
+            await result_map["proposed"].write_markdown(output_cfg.markdown_path)
+
         logging.info("Markdown written to %s", output_cfg.markdown_path)
 
 

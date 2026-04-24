@@ -22,6 +22,7 @@ class GeneralConfig(BaseModel):
     lp_triage_updates: UpdateFilter = UpdateFilter.theirs
     savebugs_dir: Path | None = None
     default_team: str | None = None
+    proposed_min_age: int = 4
 
     @model_validator(mode="after")
     def expand_savebugs_dir(self) -> GeneralConfig:
@@ -54,6 +55,7 @@ class TeamConfig(BaseModel):
     discourse_triage_categories: list[str] = []
     github_todo_label: str | None = None  # default todo label that don't specify their own
     github_repos: list[GithubRepoConfig] = []
+    proposed_migration_teams: list[str] = []
 
     @field_validator("github_repos", mode="before")
     @classmethod
