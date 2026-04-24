@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import time as _time
 
 from .config import StarTriageConfig
 from .dates import compact_date_range, reverse_triage_task_day
@@ -52,14 +53,22 @@ async def run_triage(
 
     # show date range once before any section output
     if opts.start and opts.end:
-        start = opts.start.strftime("%Y-%m-%d (%A)")
-        end = opts.end.strftime("%Y-%m-%d (%A)")
-        range = f" {compact_date_range(opts.start, opts.end)}"
-
-        if opts.start == opts.end:
-            range_verbose = f"on {start}"
+        _day_range = opts.start.time() == _time.min and opts.end.time() == _time.max
+        if _day_range:
+            range = f" {compact_date_range(opts.start, opts.end)}"
+            start_str = opts.start.strftime("%Y-%m-%d (%A)")
+            end_str = opts.end.strftime("%Y-%m-%d (%A)")
+            same = opts.start.date() == opts.end.date()
         else:
-            range_verbose = f"between {start} and {end} inclusive"
+            range = f" {opts.start.isoformat()}->{opts.end.isoformat()}"
+            start_str = opts.start.isoformat()
+            end_str = opts.end.isoformat()
+            same = opts.start == opts.end
+
+        if same:
+            range_verbose = f"on {start_str}"
+        else:
+            range_verbose = f"between {start_str} and {end_str} inclusive"
 
         triage_task_name = reverse_triage_task_day(opts.start, opts.end)
 
@@ -91,16 +100,11 @@ async def run_triage(
 
         # ensure the section order
         result_map = dict(results)
-        for source in ("launchpad", "github", "discourse"):
+        for source in ("launchpad", "github", "discourse", "proposed"):
             if source not in result_map:
                 continue
             r = result_map[source]
             await r.write_markdown(output_cfg.markdown_path)
-
-        if "proposed" in result_map:
-            with output_cfg.markdown_path.open("a", encoding="utf-8") as fh:
-                fh.write("\n# Proposed Migration\n\n")
-            await result_map["proposed"].write_markdown(output_cfg.markdown_path)
 
         logging.info("Markdown written to %s", output_cfg.markdown_path)
 

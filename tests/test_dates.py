@@ -6,7 +6,12 @@ import datetime
 
 import pytest
 
-from startriage.dates import compact_date_range, parse_interval, reverse_triage_task_day
+from startriage.dates import (
+    compact_date_range,
+    parse_interval,
+    reverse_triage_task_day,
+    triage_task_date_range,
+)
 
 
 def _d(s: str) -> datetime.date:
@@ -15,16 +20,12 @@ def _d(s: str) -> datetime.date:
 
 def _dt_start(s: str) -> datetime.datetime:
     """Midnight UTC on the given date -- the expected start of an interval."""
-    return datetime.datetime.combine(
-        _d(s), datetime.time.min, tzinfo=datetime.timezone.utc
-    )
+    return datetime.datetime.combine(_d(s), datetime.time.min, tzinfo=datetime.timezone.utc)
 
 
 def _dt_end(s: str) -> datetime.datetime:
     """Last microsecond of the given date UTC -- the expected end of an interval."""
-    return datetime.datetime.combine(
-        _d(s), datetime.time.max, tzinfo=datetime.timezone.utc
-    )
+    return datetime.datetime.combine(_d(s), datetime.time.max, tzinfo=datetime.timezone.utc)
 
 
 # --- reverse_auto_date_range ---
@@ -48,6 +49,31 @@ def _dt_end(s: str) -> datetime.datetime:
 )
 def test_reverse_auto_date_range(start, end, expected):
     assert reverse_triage_task_day(_d(start), _d(end)) == expected
+
+
+# --- triage_task_date_range ---
+
+
+def test_triage_task_date_range_none_monday():
+    # No keyword on a Monday: should give the Fri-Sun range
+    ref = datetime.date(2026, 4, 20)  # Monday
+    start, end = triage_task_date_range(None, today=ref)
+    assert start == _dt_start("2026-04-17")  # Friday
+    assert end == _dt_end("2026-04-19")  # Sunday
+
+
+def test_triage_task_date_range_none_tuesday():
+    # No keyword on a Tuesday: should give yesterday (Monday)
+    ref = datetime.date(2026, 4, 21)  # Tuesday
+    start, end = triage_task_date_range(None, today=ref)
+    assert start == _dt_start("2026-04-20")
+    assert end == _dt_end("2026-04-20")
+
+
+def test_triage_task_date_range_none_weekend_raises():
+    ref = datetime.date(2026, 4, 18)  # Saturday
+    with pytest.raises(ValueError, match="weekend"):
+        triage_task_date_range(None, today=ref)
 
 
 # --- parse_interval ---

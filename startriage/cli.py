@@ -194,10 +194,10 @@ def _filter_from_args(
     config: StarTriageConfig, args: argparse.Namespace, source_filter: set[str] | None = None
 ) -> TaskFilterOptions:
     # mutually exclusive options in parser
-    if args.triage_day:
-        start, end = triage_task_date_range(args.triage_day)
-    else:
+    if args.interval:
         start, end = parse_interval(args.interval)
+    else:
+        start, end = triage_task_date_range(args.triage_day)
 
     recent_since: datetime = datetime.now(timezone.utc) - timedelta(days=args.flag_recent)
     old_since: datetime = datetime.now(timezone.utc) - timedelta(days=args.flag_old)

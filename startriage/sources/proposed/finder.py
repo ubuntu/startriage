@@ -26,6 +26,7 @@ log = logging.getLogger(__name__)
 # dicts using their 'dictitems' mapping so we never exec arbitrary Python.
 # ---------------------------------------------------------------------------
 
+
 def _make_safe_loader() -> type[yaml.SafeLoader]:
     class _Loader(yaml.SafeLoader):
         pass

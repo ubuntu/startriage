@@ -79,8 +79,10 @@ def _print_terminal_table(excuses: list[MigrationExcuse], cfg: OutputConfig) -> 
     )
 
     header = "  %-*s | %-*s | %-10s | %s" % (
-        pkg_w, "Package",
-        old_new_w, "Old \u2192 New",
+        pkg_w,
+        "Package",
+        old_new_w,
+        "Old \u2192 New",
         "Since",
         "Notes",
     )

@@ -19,16 +19,17 @@ startriage triage
 # Specify a team explicitly
 startriage -t ubuntu-server triage
 
-# Triage for a specific day or range
-startriage triage -i monday          # last Monday's triage window
+# Changes on a specific day or range
+startriage triage -i monday
+startriage triage -i yesterday:  # changes since yesterday
 startriage triage -i 2026-04-14
-startriage triage -i 2026-04-14:2026-04-18
+startriage triage -i 2026-04-14:2026-04-18  # range is inclusive
 
 # Housekeeping: server-todo tagged bugs with assignees
 startriage todo
 
-# Subscription backlog (ubuntu-server subscribed bugs, oldest/newest 20)
-startriage todo --subscribed --limit 20
+# Subscription backlog (ubuntu-server subscribed bugs)
+startriage todo --subscribed
 ```
 
 ## Common Options
@@ -65,6 +66,7 @@ lp_ignore_packages = ["linux", "linux-meta"]
 discourse_categories = ["project/server"]
 discourse_triage_categories = ["project/server/server-triage"]  # suppress triage-post main entries; show replies only
 github_repos = ["canonical/ubuntu-server-documentation"]
+proposed_migration_teams = ["ubuntu-server"]
 ```
 
 Persist common settings without editing the file by hand:
@@ -72,7 +74,6 @@ Persist common settings without editing the file by hand:
 ```bash
 startriage config show
 startriage config set --default-team ubuntu-server
-startriage -t ubuntu-server config set --discourse-category Server
 ```
 
 ## Save / Compare Bug Lists

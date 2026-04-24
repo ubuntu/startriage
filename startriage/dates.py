@@ -6,32 +6,36 @@ import re
 from datetime import date, datetime, timedelta, timezone
 
 
-def triage_task_date_range(keyword: str, today: date | None = None) -> tuple[datetime, datetime]:
+def triage_task_date_range(keyword: str | None, today: date | None = None) -> tuple[datetime, datetime]:
     """Given a day-of-week keyword, calculate the inclusive triage date range.
 
     Monday triage covers the previous Friday, Saturday and Sunday.
     Tuesday-Friday triage covers only the previous day.
     Weekends are not valid triage days.
 
+    When *keyword* is None the current day (or *today*) is used as the triage day.
+
     :raises ValueError: for weekend day names or unrecognised keywords.
     """
     triage_day = today or datetime.now().date()
-    triage_found = False
 
-    for _ in range(7):
-        if keyword.lower() in (
-            datetime.strftime(triage_day, "%A").lower(),
-            datetime.strftime(triage_day, "%a").lower(),
-        ):
-            triage_found = True
-            break
-        triage_day -= timedelta(days=1)
+    if keyword is not None:
+        triage_found = False
+        for _ in range(7):
+            if keyword.lower() in (
+                datetime.strftime(triage_day, "%A").lower(),
+                datetime.strftime(triage_day, "%a").lower(),
+            ):
+                triage_found = True
+                break
+            triage_day -= timedelta(days=1)
 
-    if not triage_found:
-        raise ValueError(f"Unrecognised day name: '{keyword}'")
+        if not triage_found:
+            raise ValueError(f"Unrecognised day name: '{keyword}'")
 
     if triage_day.weekday() in (5, 6):
-        raise ValueError(f"No triage range defined for weekend day '{keyword}'")
+        day_label = keyword or triage_day.strftime("%A")
+        raise ValueError(f"No triage range defined for weekend day '{day_label}'")
 
     if triage_day.weekday() == 0:
         # Monday triage: previous Fri-Sun
