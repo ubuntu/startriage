@@ -12,11 +12,19 @@ description: |
 
   Configuration is read from ~/.config/startriage.toml.
 
+title: Startriage
+contact: https://github.com/ubuntu/startriage/issues
+license: GPL-3.0
+donation: https://github.com/ubuntu/startriage
+issues: https://github.com/ubuntu/startriage/issues
+source-code: https://github.com/ubuntu/startriage
+website: https://github.com/ubuntu/startriage
+
 base: core24
 type: app
 version: git
 confinement: strict
-grade: beta
+grade: stable
 
 apps:
   startriage:
