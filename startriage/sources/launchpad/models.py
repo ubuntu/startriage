@@ -26,6 +26,9 @@ COLOR_RESET = "\033[0m"
 LONG_URL_ROOT = "https://bugs.launchpad.net/ubuntu/+bug/"
 LPBUGREF = "LP: #"
 
+# Visual width of the Release column in the triage table.
+_RELEASE_COL_WIDTH = 7
+
 
 def mark(text: str, color: str) -> str:
     return "".join([color, text, COLOR_RESET])
@@ -127,7 +130,10 @@ class Task:
     @property
     @lru_cache(maxsize=None)  # noqa: B019
     def _sibling_tasks(self) -> dict[str, Any]:
-        """All sibling tasks for this package across series -- cached."""
+        """All sibling tasks for this package across series -- cached.
+
+        Order: devel first, then stable series newest-first (LP API order reversed).
+        """
         siblings = {}
         for lp_task in self.lp_task.bug.bug_tasks:
             parts = str(lp_task).split("/")
@@ -137,7 +143,9 @@ class Task:
                 continue
             series = parts[5] if parts[5] != "+source" else "-devel"
             siblings[series] = lp_task
-        return siblings
+        devel = {k: v for k, v in siblings.items() if k.startswith("-")}
+        stable = {k: v for k, v in siblings.items() if not k.startswith("-")}
+        return devel | dict(reversed(stable.items()))
 
     def is_in_unapproved(self, ctx: RenderContext) -> bool:
         """Check bulk unapproved cache from RenderContext."""
@@ -155,9 +163,12 @@ class Task:
     def _is_verification_done(self) -> bool:
         return any("verification-done-" in t for t in self.tags)
 
-    def release_tasks_str(self, ctx: RenderContext, width: int = 0) -> str:
-        info = ""
-        visible_len = 0
+    def _release_chars(self, ctx: RenderContext) -> list[str]:
+        """Return one element per active series task.
+        Each element is one distro release, and the text can contain an ANSI color code.
+        Order: devel first, then stable series newest-first.
+        """
+        chars = []
         for series, lp_task in self._sibling_tasks.items():
             char = "D" if series[0] == "-" else series[0].upper()
             if lp_task.status in ctx.nowork_statuses:
@@ -166,11 +177,12 @@ class Task:
                 char = mark(char, COLOR_STATUS_WAITOTHER)
             elif lp_task.status in ctx.open_statuses:
                 char = mark(char, COLOR_STATUS_OPEN)
-            info += char
-            visible_len += 1
-        if width > visible_len:
-            info += " " * (width - visible_len)
-        return info
+            chars.append(char)
+        return chars
+
+    def release_tasks_str(self, ctx: RenderContext, width: int = 0) -> str:
+        chars = self._release_chars(ctx)
+        return "".join(chars) + " " * max(0, width - len(chars))
 
     def get_flags(self, ctx: RenderContext, newbug: bool = False) -> str:
         v_needed = mark("v", COLOR_STATUS_WAITOTHER)
@@ -186,7 +198,14 @@ class Task:
 
     @staticmethod
     def get_table_header(extended: bool = False) -> str:
-        text = "%-12s | %-6s | %-7s | %-13s | %-19s |" % ("Bug", "Flags", "Release", "Status", "Package")
+        text = "%-12s | %-6s | %-*s | %-13s | %-19s |" % (
+            "Bug",
+            "Flags",
+            _RELEASE_COL_WIDTH,
+            "Release",
+            "Status",
+            "Package",
+        )
         if extended:
             text += " %-8s | %-10s | %-13s |" % ("Last Upd", "Prio", "Assignee")
         text += " %-60s |" % "Title"
@@ -204,10 +223,20 @@ class Task:
         fmt_len = bugid_len + len(LPBUGREF if shortlinks else LONG_URL_ROOT)
         bug_str = hyperlink(self.url, f"%-{fmt_len}s" % bug_ref)
 
+        # split up distro tasks to multiple lines if necessary.
+        release_chars = self._release_chars(ctx)
+        chunks = [
+            release_chars[i : i + _RELEASE_COL_WIDTH]
+            for i in range(0, len(release_chars), _RELEASE_COL_WIDTH)
+        ] or [[]]
+
+        def _release_col(chunk: list[str]) -> str:
+            return "".join(chunk) + " " * (_RELEASE_COL_WIDTH - len(chunk))
+
         text = "%-12s | %6s | %s | %-13s | %-19s |" % (
             bug_str,
             self.get_flags(ctx, newbug),
-            self.release_tasks_str(ctx, width=7),
+            _release_col(chunks[0]),
             self.status,
             truncate_string(self.src, 19),
         )
@@ -218,6 +247,16 @@ class Task:
                 truncate_string(self.assignee or "", 12),
             )
         text += " %-60s |" % truncate_string(self.short_title, 60)
+
+        if len(chunks) > 1:
+            # Continuation rows: blank out everything except the release column.
+            pre = " " * fmt_len + " | " + " " * 6 + " | "
+            post = " | %-13s | %-19s |" % ("", "")
+            if extended:
+                post += " %8s | %-10s | %-13s |" % ("", "", "")
+            post += " %-60s |" % ""
+            for chunk in chunks[1:]:
+                text += "\n" + pre + _release_col(chunk) + post
 
         return text
 
