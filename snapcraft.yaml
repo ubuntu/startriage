@@ -2,14 +2,13 @@ name: startriage
 summary: Unified triage tool for Ubuntu bugs, documentation, and forum posts
 description: |
   startriage is a unified triage tool for Ubuntu developer teams.
-  It combines bug triage (Launchpad), documentation triage (GitHub),
-  and forum post triage (Discourse) into a single command.
+  It combines several triage sources: Launchpad, GitHub, Discourse, proposed-migration, ... into a single command.
 
   Run daily triage with:
-    startriage list -t ubuntu-server
+    startriage triage
 
-  For weekly bug housekeeping:
-    startriage list todo -t ubuntu-server
+  For bug housekeeping:
+    startriage todo
 
   Configuration is read from ~/.config/startriage.toml.
 
