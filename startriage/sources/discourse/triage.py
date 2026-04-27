@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-import io
 import logging
 import webbrowser
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from pathlib import Path
 
 import aiohttp
 
@@ -142,17 +140,6 @@ class DiscourseTriage(TriageResult):
                 triage_category_ids=self.triage_category_ids,
             )
 
-    async def write_markdown(self, path: Path) -> None:
-        """Write markdown-formatted output to a file."""
-
-        buf = io.StringIO()
-        await self.print_section(
-            OutputConfig(fmt=OutputFormat.MARKDOWN, out=buf, open_in_browser=False, terminal_links=False)
-        )
-
-        with path.open("a", encoding="utf-8") as fh:
-            fh.write(buf.getvalue())
-
     async def record(self, persistor: BugPersistor) -> None:
         pass  # no bugs to record, just forum comments
 
@@ -183,13 +170,14 @@ class DiscourseTriage(TriageResult):
                 link = hyperlink(post_url, str(post.get_id()), cfg.fmt)
                 print(f"{status_str}{link} [{date_str.strip()}] {preview}", file=cfg.out)
             case OutputFormat.TERMINAL:
+                post_txt = f"{post.get_id()} {preview}"
                 if cfg.terminal_links:
-                    id_str = hyperlink(post_url, str(post.get_id()), cfg.fmt)
+                    post_ref = hyperlink(post_url, post_txt, cfg.fmt)
                     url_str = ""
                 else:
-                    id_str = str(post.get_id())
+                    post_ref = post_txt
                     url_str = f" ({post_url})"
-                print(f"{status_str}{id_str}[{date_str.strip()}] {preview}{url_str}", file=cfg.out)
+                print(f"{status_str}{post_ref} [{date_str.strip()}]{url_str}", file=cfg.out)
             case _:
                 raise NotImplementedError
 
@@ -226,7 +214,7 @@ class DiscourseTriage(TriageResult):
 
                 date_str = f" {date_updated.strftime('%Y-%m-%d')}" if date_updated else ""
                 url_str = "" if cfg.terminal_links else f" ({topic_url})"
-                print(f"{status_str}{link}[{date_str.strip()}]{url_str}", file=cfg.out)
+                print(f"{status_str}{link} [{date_str.strip()}]{url_str}", file=cfg.out)
 
             case _:
                 raise NotImplementedError
@@ -274,6 +262,7 @@ class DiscourseTriage(TriageResult):
             posts = [
                 _create_post_meta(p, start, end, self.finder.get_post_url(topic, i))
                 for i, p in enumerate(posts_raw)
+                if not p.is_small_action()
             ]
 
             # Topics in the triage category: ignore main-post updates, show replies only.
@@ -309,16 +298,23 @@ class DiscourseTriage(TriageResult):
             # Find main post
             main_post = next((m for m in final_list if m.post.is_main_post_for_topic()), None)
 
+            # Best date for the header: latest update_date among relevant posts
+            # (falls back to None if no relevant post has a date)
+            best_date = max(
+                (p.update_date for p in posts if p.update_date is not None),
+                default=None,
+            )
+
             if main_post:
                 self._print_topic_header(
                     topic,
                     main_post.status,
-                    main_post.update_date,
+                    main_post.update_date or best_date,
                     cfg,
                 )
                 final_list = [m for m in final_list if m != main_post and m.contains_relevant_posts]
             else:
-                self._print_topic_header(topic, PostStatus.UNCHANGED, None, cfg)
+                self._print_topic_header(topic, PostStatus.UNCHANGED, best_date, cfg)
 
             for post in final_list[:-1]:
                 self._print_comment_chain(post, cfg, ["├"])

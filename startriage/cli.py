@@ -154,6 +154,12 @@ GREEN = done
         help="Days to consider subscribed bugs expired if no update happened",
     )
     triage_p.add_argument(
+        "--extended",
+        type=_bool_flag,
+        metavar="BOOL",
+        help="Display more bug information (assignee). default: %(default)s",
+    )
+    triage_p.add_argument(
         "--update",
         choices=UpdateFilter,
         help="Filter by who last updated bugs (default: theirs)",
@@ -188,6 +194,20 @@ GREEN = done
     config_show_p.set_defaults(func=_show_config)
 
     return parser
+
+
+def _bool_flag(value: str) -> bool:
+    """
+    parse a boolean flag from argument.
+    we do this to also allow None (= unset, which doesn't work with action=store_true).
+    """
+    match value.lower():
+        case "true" | "1" | "yes" | "y":
+            return True
+        case "false" | "0" | "no" | "n":
+            return False
+        case _:
+            raise argparse.ArgumentTypeError(f"Invalid boolean value: {value!r}")
 
 
 def _filter_from_args(
@@ -246,6 +266,9 @@ async def _run_triage(args: argparse.Namespace, config: StarTriageConfig) -> Non
         general = general.model_copy(update={"lp_expire_tagged": args.expire_tagged})
     if args.expire is not None:
         general = general.model_copy(update={"lp_expire": args.expire})
+    if args.extended is not None:
+        general = general.model_copy(update={"lp_extended": args.extended})
+    config.general = general
 
     output_cfg = OutputConfig(
         fmt=args.format,

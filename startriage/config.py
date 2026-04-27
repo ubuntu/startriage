@@ -18,7 +18,7 @@ class GeneralConfig(BaseModel):
 
     lp_expire_tagged: int = 60
     lp_expire: int = 180
-    lp_extended: bool = False
+    lp_extended: bool | None = None
     lp_triage_updates: UpdateFilter = UpdateFilter.theirs
     savebugs_dir: Path | None = None
     default_team: str | None = None
@@ -100,7 +100,7 @@ def _load_defaults() -> dict:
         return tomllib.load(f)
 
 
-def load_config(user_config_path: Path | None = None) -> StarTriageConfig:
+def load_config(user_config_path: Path | None) -> StarTriageConfig:
     """Load and merge defaults with user config, validated via pydantic.
 
     Merge strategy:

@@ -1,7 +1,6 @@
 [general]
 lp_expire_tagged = 60
 lp_expire = 180
-lp_extended = false
 lp_triage_updates = "theirs"
 
 [team.ubuntu-server]

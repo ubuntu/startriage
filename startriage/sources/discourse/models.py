@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 
 
@@ -13,7 +14,9 @@ class DiscoursePost:
         self._author_username = post_json.get("username")
         self._author_name = post_json.get("name")
         self._post_number = post_json.get("post_number")
+        self._post_type: int = post_json.get("post_type", 1)
         self._data = post_json.get("raw")
+        self._cooked = post_json.get("cooked")
         self._num_replies = post_json.get("reply_count")
         self._reply_to_number = post_json.get("reply_to_post_number")
         self._created_at = self._parse_dt(post_json.get("created_at"))
@@ -50,7 +53,12 @@ class DiscoursePost:
         return self._post_number
 
     def get_data(self) -> str | None:
-        return self._data
+        if self._data is not None:
+            return self._data
+        if self._cooked:
+            # Strip HTML tags and collapse whitespace for a plain-text preview
+            return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", self._cooked)).strip() or None
+        return None
 
     def get_num_replies(self) -> int | None:
         return self._num_replies
@@ -60,6 +68,10 @@ class DiscoursePost:
 
     def is_main_post_for_topic(self) -> bool:
         return self._post_number == 1
+
+    def is_small_action(self) -> bool:
+        """Return True for automated system posts (post_type=3) with no user content."""
+        return self._post_type == 3
 
 
 class DiscourseTopic:

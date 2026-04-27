@@ -4,12 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
-import io
 import json
 import logging
 import webbrowser
 from dataclasses import dataclass, field
-from pathlib import Path
 
 import aiohttp
 from launchpadlib.launchpad import Launchpad
@@ -43,7 +41,17 @@ class LaunchpadTriage(TriageResult):
         cfg: OutputConfig,
     ) -> None:
         """Show launchpad items."""
-        extended = self.config.lp_extended
+
+        if self.config.lp_extended is not None:
+            extended = self.config.lp_extended
+        else:
+            match self.mode:
+                case FetchMode.triage:
+                    extended = False
+                case FetchMode.todo | FetchMode.subscribed:
+                    extended = True
+                case _:
+                    raise NotImplementedError(f"{self.mode!r}")
 
         bug_count = len({t.number for t in self.tasks.tasks})
 
@@ -94,13 +102,6 @@ class LaunchpadTriage(TriageResult):
                 self.config,
                 extended,
             )
-
-    async def write_markdown(self, path: Path) -> None:
-        """Append markdown-formatted output to a file."""
-        buf = io.StringIO()
-        await self.print_section(OutputConfig(fmt=OutputFormat.MARKDOWN, out=buf))
-        with path.open("a", encoding="utf-8") as fd:
-            fd.write(buf.getvalue())
 
     async def record(self, persistor: BugPersistor) -> None:
         ids = {t.number for t in self.tasks.tasks}

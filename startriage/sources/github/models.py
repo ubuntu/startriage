@@ -21,6 +21,7 @@ class PullRequest:
     number: int
     title: str
     html_url: str
+    repo_url: str
     created_at: datetime | None
     updated_at: datetime | None
     state: str
@@ -34,6 +35,7 @@ class PullRequest:
             number=d["number"],
             title=d["title"],
             html_url=d["html_url"],
+            repo_url=d["repository_url"],
             created_at=_parse_dt(d.get("created_at")),
             updated_at=_parse_dt(d.get("updated_at")),
             state=d.get("state", ""),
@@ -47,6 +49,7 @@ class Issue:
     number: int
     title: str
     html_url: str
+    repo_url: str
     created_at: datetime | None
     updated_at: datetime | None
     state: str
@@ -60,6 +63,7 @@ class Issue:
             number=d["number"],
             title=d["title"],
             html_url=d["html_url"],
+            repo_url=d["repository_url"],
             created_at=_parse_dt(d.get("created_at")),
             updated_at=_parse_dt(d.get("updated_at")),
             state=d.get("state", ""),
@@ -78,6 +82,7 @@ class GithubItemEntry:
     item_type: GitHubItemType
     url: str
     repo: str
+    repo_url: str
     item: Issue | PullRequest
 
     @property

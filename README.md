@@ -15,9 +15,14 @@ uv run startriage
 ```bash
 # Daily triage (yesterday's activity, or Friday–Sunday if today is Monday)
 startriage triage
+# Generate a markdown report as template for discourse alongside
+startriage triage --markdown /tmp/summary.md
 
 # Specify a team explicitly
 startriage -t ubuntu-server triage
+
+# Use a subset of sources
+startriage -s discourse,github triage
 
 # Changes on a specific day or range
 startriage triage -i monday
@@ -36,13 +41,13 @@ startriage todo --subscribed
 
 | Option | Description |
 |--------|-------------|
-| `-t TEAM` | Select a configured team |
-| `-i DATE[:DATE]` | Include changes from this day or range (YYYY-MM-DD, day name, or `yesterday`) |
-| `--source SOURCE` | Restrict to one source: `launchpad`/`bugs`, `discourse`/`forum`, `github`/`docs` |
+| `-t --team TEAM` | Select a configured team |
+| `-i --interval DATE[:DATE]` | Include changes from this day or range (YYYY-MM-DD, day name, or `yesterday`) |
+| `-s --source SOURCE` | Restrict to one source: `launchpad`, `discourse`, `github` |
 | `--update {theirs,ours,all}` | Filter bugs by who last updated them |
 | `--flag-recent DAYS` | Mark bugs updated within N days with `U` flag |
 | `--flag-old DAYS` | Mark bugs inactive for more than N days with `O` flag |
-| `-o` / `--open` | Open results in the web browser |
+| `--open -o` | Open results in the web browser |
 | `--fullurls` | Print full URLs instead of terminal hyperlinks |
 | `--markdown PATH` | Write parallel markdown output (for pasting into Discourse posts) |
 
@@ -67,6 +72,8 @@ discourse_categories = ["project/server"]
 discourse_triage_categories = ["project/server/server-triage"]  # suppress triage-post main entries; show replies only
 github_repos = ["canonical/ubuntu-server-documentation"]
 proposed_migration_teams = ["ubuntu-server"]
+
+# other team definitions
 ```
 
 Persist common settings without editing the file by hand:
@@ -87,18 +94,4 @@ startriage todo -C ~/savebugs/todo-2026-04-01.yaml
 
 # Auto-save and auto-compare (uses the most recent file in savebugs_dir)
 startriage todo
-```
-
-## Discourse Backlog
-
-Print a single Discourse post in backlog format:
-
-```bash
-startriage forum backlog 12345
-```
-
-## Forum-Only Triage
-
-```bash
-startriage triage --source forum
 ```

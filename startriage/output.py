@@ -41,10 +41,6 @@ class TriageResult(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def write_markdown(self, path: Path) -> None:
-        raise NotImplementedError
-
-    @abstractmethod
     async def record(self, persistor: BugPersistor) -> None:
         raise NotImplementedError
 

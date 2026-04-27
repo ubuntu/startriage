@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-import io
 import webbrowser
 from dataclasses import dataclass, field
 from datetime import date
-from pathlib import Path
 
 import aiohttp
 
@@ -38,9 +36,11 @@ class GithubTriage(TriageResult):
         rows: list[GithubItemEntry] = []
         for result in self.results:
             for pr in result.prs:
-                rows.append(GithubItemEntry(GitHubItemType.pr, pr.html_url, result.repo, pr))
+                rows.append(GithubItemEntry(GitHubItemType.pr, pr.html_url, result.repo, result.repo_url, pr))
             for issue in result.issues:
-                rows.append(GithubItemEntry(GitHubItemType.issue, issue.html_url, result.repo, issue))
+                rows.append(
+                    GithubItemEntry(GitHubItemType.issue, issue.html_url, result.repo, result.repo_url, issue)
+                )
         return rows
 
     async def _print_items(
@@ -95,7 +95,9 @@ class GithubTriage(TriageResult):
                     )
                 case OutputFormat.TERMINAL:
                     link = hyperlink(entry.url, num_text, cfg.fmt)
-                    repo_col = truncate_string(entry.repo, repo_w, pad=True)
+                    repo_col = hyperlink(
+                        entry.repo_url, truncate_string(entry.repo, repo_w, pad=True), cfg.fmt
+                    )
                     assignee_col = truncate_string(assignee, assignee_w, pad=True)
                     row_str = f"{link} | {entry.item_type:<{type_w}} | {repo_col} | {assignee_col}"
                     print(f"{row_str} | {date_str} | {truncate_string(entry.item.title, 50)}", file=cfg.out)
@@ -139,7 +141,8 @@ class GithubTriage(TriageResult):
         else:
             former_bugs = set()
 
-        await self._print_items(items, cfg, former_bugs)
+        if items:
+            await self._print_items(items, cfg, former_bugs)
 
         if cfg.fmt == OutputFormat.TERMINAL:
             print(file=cfg.out)
@@ -151,13 +154,6 @@ class GithubTriage(TriageResult):
                     for key in gone:
                         print(f"  {key}", file=cfg.out)
                     print(file=cfg.out)
-
-    async def write_markdown(self, path: Path) -> None:
-        """Append markdown-formatted output to a file."""
-        buf = io.StringIO()
-        await self.print_section(OutputConfig(fmt=OutputFormat.MARKDOWN, out=buf))
-        with path.open("a", encoding="utf-8") as fh:
-            fh.write(buf.getvalue())
 
     async def record(self, persistor: BugPersistor) -> None:
         items = self._collect_items()

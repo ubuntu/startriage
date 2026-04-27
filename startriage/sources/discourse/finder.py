@@ -167,10 +167,13 @@ class DiscourseFinder:
             topic = DiscourseTopic(t)
             update_time = topic.get_latest_update_time()
             too_old = ignore_before is not None and update_time is not None and update_time < ignore_before
-            too_new = ignore_after is not None and update_time is not None and update_time >= ignore_after
-            if not too_old and not too_new:
+            # Note: do NOT skip topics based on ignore_after here — a topic whose
+            # latest activity is after the range end may still have posts within
+            # the range.  Post-level filtering in _create_post_meta handles
+            # relevance; we only early-exit for topics that are too old.
+            if not too_old:
                 category.add_topic(topic)
-            elif too_old and not topic.get_pinned():
+            elif not topic.get_pinned():
                 return  # topics are date-ordered; stop early
 
         if "more_topics_url" in topic_list:

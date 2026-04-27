@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
 from datetime import time as _time
 
@@ -96,7 +97,10 @@ async def run_triage(
 
     # create markdown template
     if output_cfg.markdown_path:
-        output_cfg.markdown_path.write_text(f"# Triage{range}\n")
+        buf =  io.StringIO()
+
+        buf.write(f"# Triage{range}\n")
+        md_cfg = OutputConfig(fmt=OutputFormat.MARKDOWN, out=buf, open_in_browser=False, terminal_links=False)
 
         # ensure the section order
         result_map = dict(results)
@@ -104,7 +108,11 @@ async def run_triage(
             if source not in result_map:
                 continue
             r = result_map[source]
-            await r.write_markdown(output_cfg.markdown_path)
+            await r.print_section(md_cfg)
+            buf.write("\n")
+
+        with output_cfg.markdown_path.open("w",encoding="utf-8") as fh:
+            fh.write(buf.getvalue())
 
         logging.info("Markdown written to %s", output_cfg.markdown_path)
 

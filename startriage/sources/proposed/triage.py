@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import io
 from dataclasses import dataclass
-from pathlib import Path
 
 import aiohttp
 
@@ -155,12 +153,6 @@ class ProposedMigrationTriage(TriageResult):
 
             case _:
                 raise NotImplementedError
-
-    async def write_markdown(self, path: Path) -> None:
-        buf = io.StringIO()
-        await self.print_section(OutputConfig(fmt=OutputFormat.MARKDOWN, out=buf))
-        with path.open("a", encoding="utf-8") as fd:
-            fd.write(buf.getvalue())
 
     async def record(self, persistor: BugPersistor) -> None:
         pass  # proposed migration items are not LP bugs
