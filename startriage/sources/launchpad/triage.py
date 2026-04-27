@@ -203,7 +203,7 @@ async def _print_bugs(
         if former_bugs and cfg.bug_persistor:
             closed = [x for x in former_bugs if x not in reported]
             print(f"\nBugs gone compared with {cfg.bug_persistor.compare_str}:", file=cfg.out)
-            gone_cfg = dataclasses.replace(cfg, open_in_browser=False)
+            gone_cfg = dataclasses.replace(cfg, open_in_browser=False, bug_persistor=None)
             await _print_bugs(
                 lp,
                 _bugs_to_tasks(closed, lp),

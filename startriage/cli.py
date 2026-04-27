@@ -164,6 +164,12 @@ GREEN = done
         choices=UpdateFilter,
         help="Filter by who last updated bugs (default: theirs)",
     )
+    triage_p.add_argument(
+        "--proposed-min-age",
+        type=int,
+        metavar="DAYS",
+        help="Minimum days of being stuck in proposed to be included in triage",
+    )
     triage_p.set_defaults(func=_run_triage)
 
     # --- todo ---
@@ -188,6 +194,15 @@ GREEN = done
     config_setdefaults_p.add_argument("--discourse-site", help="Discourse website base URL")
     config_setdefaults_p.add_argument("--discourse-category", help="Discourse category")
     config_setdefaults_p.add_argument("--default-team", help="Set general.default_team in config")
+    config_setdefaults_p.add_argument(
+        "--save-bugs-dir", metavar="PATH", help="Directory to track previous bugs in"
+    )
+    config_setdefaults_p.add_argument(
+        "--proposed-min-age",
+        type=int,
+        metavar="DAYS",
+        help="Set days of being stuck in proposed (config's general.proposed_min_age)",
+    )
     config_setdefaults_p.set_defaults(func=_set_config_settings)
 
     config_show_p = config_sp.add_parser("show", help="Display resolved configuration")
@@ -268,6 +283,8 @@ async def _run_triage(args: argparse.Namespace, config: StarTriageConfig) -> Non
         general = general.model_copy(update={"lp_expire": args.expire})
     if args.extended is not None:
         general = general.model_copy(update={"lp_extended": args.extended})
+    if args.proposed_min_age is not None:
+        general = general.model_copy(update={"proposed_min_age": args.proposed_min_age})
     config.general = general
 
     output_cfg = OutputConfig(
@@ -310,17 +327,6 @@ async def _run_todo(args: argparse.Namespace, config: StarTriageConfig) -> None:
     )
 
 
-async def _show_config(args: argparse.Namespace, config: StarTriageConfig) -> None:
-    print("[general]")
-    for field, value in config.general.model_dump().items():
-        print(f"  {field} = {value!r}")
-    for team_name, team in config.team.items():
-        print()
-        print(f"[team.{team_name}]")
-        for field, value in team.model_dump().items():
-            print(f"  {field} = {value!r}")
-
-
 async def _set_config_settings(args: argparse.Namespace, _config: StarTriageConfig) -> None:
     path = (args.config or DEFAULT_USER_CONFIG).expanduser()
     try:
@@ -339,8 +345,22 @@ async def _set_config_settings(args: argparse.Namespace, _config: StarTriageConf
             raise ValueError("error: --discourse-category requires -t/--team")
         team_section = data.setdefault("team", {}).setdefault(args.team, {})
         team_section["discourse_categories"] = args.discourse_category
+    if args.save_bugs_dir:
+        if not Path(args.save_bugs_dir).is_dir():
+            raise ValueError(f"error: --save-bugs-dir {args.save_bugs_dir!r} is not a directory")
+        data.setdefault("general", {})["savebugs_dir"] = args.save_bugs_dir
+    if args.proposed_min_age is not None:
+        data.setdefault("general", {})["proposed_min_age"] = args.proposed_min_age
+
+    if not data:
+        print("No settings to update.")
+        return
 
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "wb") as f:
         tomli_w.dump(data, f)
     print(f"Settings saved to {path!r}")
+
+
+async def _show_config(args: argparse.Namespace, config: StarTriageConfig) -> None:
+    print(config.show())

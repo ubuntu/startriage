@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import tomllib
 from importlib.resources import files
+from importlib.resources.abc import Traversable
 from pathlib import Path
 
+import tomli_w
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 from .enums import UpdateFilter
@@ -28,6 +30,8 @@ class GeneralConfig(BaseModel):
     def expand_savebugs_dir(self) -> GeneralConfig:
         if self.savebugs_dir is not None:
             self.savebugs_dir = self.savebugs_dir.expanduser()
+            if not self.savebugs_dir.is_dir():
+                raise ValueError(f"savebugs_dir {self.savebugs_dir!r} is not a directory")
         return self
 
 
@@ -36,6 +40,7 @@ class GithubRepoConfig(BaseModel):
 
     name: str  # org/reponame
     todo_labels: list[str] | None = None
+    watch_labels: list[str] | None = None
 
     @classmethod
     def from_str_or_dict(cls, v: object) -> GithubRepoConfig:
@@ -53,7 +58,8 @@ class TeamConfig(BaseModel):
     lp_ignore_packages: list[str] = []
     discourse_categories: list[str] = []
     discourse_triage_categories: list[str] = []
-    github_todo_label: str | None = None  # default todo label that don't specify their own
+    github_todo_labels: list[str] | None = None  # overridden by github_repos[*].todo_labels
+    # TODO: github_watch_labels: list[str] | None = None  # overridden by github_repos[*].watch_labels
     github_repos: list[GithubRepoConfig] = []
     proposed_migration_teams: list[str] = []
 
@@ -71,6 +77,7 @@ class StarTriageConfig(BaseModel):
 
     general: GeneralConfig = GeneralConfig()
     team: dict[str, TeamConfig] = {}
+    loaded_paths: list[Path] = []
 
     def get_team(self, name: str) -> TeamConfig:
         """Return TeamConfig for the named team, raising KeyError if not found."""
@@ -79,6 +86,21 @@ class StarTriageConfig(BaseModel):
         except KeyError:
             available = ", ".join(sorted(self.team.keys())) or "(none)"
             raise KeyError(f"Unknown team '{name}'. Available teams: {available}") from None
+
+    def show(self) -> str:
+        data: dict = {"general": {}, "team": {}}
+        for field, value in self.general.model_dump(exclude_none=True).items():
+            data["general"][field] = value
+        for team_name, team in self.team.items():
+            data["team"][team_name] = team.model_dump(exclude_none=True)
+
+        lines: list[str] = []
+        for p in self.loaded_paths:
+            lines.append(f"# loaded from: {p}")
+        if self.loaded_paths:
+            lines.append("")
+        lines.append(tomli_w.dumps(data).rstrip())
+        return "\n".join(lines)
 
 
 def _load_toml(path: Path) -> dict:
@@ -90,13 +112,12 @@ def _load_toml(path: Path) -> dict:
         return {}
 
 
-def _load_defaults() -> dict:
+def _load_defaults(path: Traversable) -> dict:
     """Load the shipped defaults.toml using importlib.resources.
 
     Works in the git repo, as an installed package, a .deb, or a snap.
     """
-    data_pkg = files("startriage") / "data" / "defaults.toml"
-    with data_pkg.open("rb") as f:
+    with path.open("rb") as f:
         return tomllib.load(f)
 
 
@@ -109,10 +130,14 @@ def load_config(user_config_path: Path | None) -> StarTriageConfig:
       that team, missing fields fall back to the defaults entry
     - Teams only in defaults remain available; teams only in user config are added
     """
-    defaults = _load_defaults()
+    defaults_path = files("startriage") / "data" / "defaults.toml"
+    defaults = _load_defaults(defaults_path)
 
     path = (user_config_path or DEFAULT_USER_CONFIG).expanduser()
     user = _load_toml(path)
+    loaded_paths: list[Path] = [Path(str(defaults_path))]
+    if user:
+        loaded_paths.append(path)
 
     # Merge general section
     merged_general = {**defaults.get("general", {}), **user.get("general", {})}
@@ -125,7 +150,9 @@ def load_config(user_config_path: Path | None) -> StarTriageConfig:
         name: {**default_teams.get(name, {}), **user_teams.get(name, {})} for name in all_team_names
     }
 
-    return StarTriageConfig.model_validate({"general": merged_general, "team": merged_teams})
+    return StarTriageConfig.model_validate(
+        {"general": merged_general, "team": merged_teams, "loaded_paths": loaded_paths}
+    )
 
 
 def resolve_team_name(team_arg: str | None, config: StarTriageConfig) -> str:

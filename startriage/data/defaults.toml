@@ -2,6 +2,10 @@
 lp_expire_tagged = 60
 lp_expire = 180
 lp_triage_updates = "theirs"
+#savebugs_dir = ~/src/ubuntu/mnt/savebugs/
+#default_team = automatic if 1 defined
+#proposed_min_age = 4
+#lp_extended = depends on mode
 
 [team.ubuntu-server]
 lp_team = "ubuntu-server"
@@ -29,5 +33,5 @@ github_repos = [
     "canonical/runc-app",
     "canonical/runc-stable",
 ]
-github_todo_label = "server-todo"
+github_todo_labels = ["server-todo"]
 proposed_migration_teams = ["ubuntu-server"]

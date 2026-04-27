@@ -78,6 +78,8 @@ class BugPersistor:
             else:
                 compare_path = None
 
+        self._compare_path = compare_path
+
         if self._save_path and not cfg.no_save:
             logging.info("Will save bug state to: %s", self._save_path)
 
@@ -118,7 +120,7 @@ class BugPersistor:
     @property
     def compare_path(self) -> Path | None:
         """Return the path used for comparison (if any)."""
-        return self._cfg.override_compare or self._save_path
+        return self._compare_path
 
     @property
     def no_save(self) -> bool:
@@ -128,8 +130,6 @@ class BugPersistor:
     @property
     def compare_str(self) -> str:
         """Return a human-friendly description of the compare source."""
-        if self._cfg.override_compare:
-            return f"compare file {self._cfg.override_compare}"
-        if self._cfg.savebugs_dir:
-            return f"latest save in {self._cfg.savebugs_dir}"
+        if self._compare_path:
+            return str(self._compare_path)
         return "(no compare source)"

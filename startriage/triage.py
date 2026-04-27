@@ -97,7 +97,7 @@ async def run_triage(
 
     # create markdown template
     if output_cfg.markdown_path:
-        buf =  io.StringIO()
+        buf = io.StringIO()
 
         buf.write(f"# Triage{range}\n")
         md_cfg = OutputConfig(fmt=OutputFormat.MARKDOWN, out=buf, open_in_browser=False, terminal_links=False)
@@ -111,7 +111,7 @@ async def run_triage(
             await r.print_section(md_cfg)
             buf.write("\n")
 
-        with output_cfg.markdown_path.open("w",encoding="utf-8") as fh:
+        with output_cfg.markdown_path.open("w", encoding="utf-8") as fh:
             fh.write(buf.getvalue())
 
         logging.info("Markdown written to %s", output_cfg.markdown_path)

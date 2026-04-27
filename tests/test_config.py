@@ -28,17 +28,19 @@ def test_load_defaults_only(tmp_path):
 
 
 def test_general_override(tmp_path):
+    bugs_dir = tmp_path / "savebugs"
+    bugs_dir.mkdir()
     p = _write_toml(
         tmp_path,
-        """\
+        f"""\
         [general]
         lp_extended = true
-        savebugs_dir = "/tmp/mybugs"
+        savebugs_dir = "{bugs_dir}"
     """,
     )
     config = load_config(p)
     assert config.general.lp_extended is True
-    assert config.general.savebugs_dir == Path("/tmp/mybugs")
+    assert config.general.savebugs_dir == bugs_dir
 
 
 def test_team_override_replaces_ignore_list(tmp_path):

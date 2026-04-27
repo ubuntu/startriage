@@ -205,20 +205,30 @@ async def find(
     team_config = config.get_team(filter.team)
     headers = _make_headers(token)
 
-    default_label = team_config.github_todo_label or team_config.lp_todo_tag
-    team_label_list: list[str] | None = [default_label] if default_label else None
+    team_label_list = team_config.github_todo_labels
+    if team_label_list is None:
+        if team_config.lp_todo_tag:
+            team_label_list = [team_config.lp_todo_tag]
 
     async with aiohttp.ClientSession(headers=headers) as session:
-        tasks = [
-            fetch_repo(
-                session,
-                repo.name,
-                filter.start,
-                filter.end,
-                labels=(repo.todo_labels or team_label_list if mode == FetchMode.todo else None),
+        tasks = []
+        for repo in team_config.github_repos:
+            labels = None
+            if mode == FetchMode.todo:
+                if repo.todo_labels is not None:
+                    labels = repo.todo_labels
+                else:
+                    labels = team_label_list
+
+            tasks.append(
+                fetch_repo(
+                    session,
+                    repo.name,
+                    filter.start,
+                    filter.end,
+                    labels=labels,
+                )
             )
-            for repo in team_config.github_repos
-        ]
         results = await asyncio.gather(*tasks)
 
     return GithubTriage(start=filter.start, end=filter.end, results=results, mode=mode)
