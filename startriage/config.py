@@ -18,8 +18,8 @@ DEFAULT_USER_CONFIG = Path("~/.config/startriage.toml")
 class GeneralConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    lp_expire_tagged: int = 60
-    lp_expire: int = 180
+    lp_expire_level1_days: int = 60
+    lp_expire_level2_days: int = 180
     lp_extended: bool | None = None
     lp_triage_updates: UpdateFilter = UpdateFilter.theirs
     savebugs_dir: Path | None = None

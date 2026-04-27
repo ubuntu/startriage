@@ -119,7 +119,7 @@ Terminal output — bug flags column (left to right):
   +  last activity NOT from the team (reply pending)
   U  updated recently (within --flag-recent days)
   O  old / dormant (beyond --flag-old days)
-  X  expiring (not seen in today's window, --expire-tagged/--expire days)
+  X  expiring (not seen in today's window, --expire-level1/2 days)
   N  new bug since last --compare file
   v  verification-needed-* tag set
   V  verification-done-* tag set
@@ -142,16 +142,16 @@ GREEN = done
     )
     triage_p.add_argument("--no-expiration", action="store_true", help="Skip expiring bugs subsection")
     triage_p.add_argument(
-        "--expire-tagged",
+        "--expire-level1",
         type=int,
         metavar="DAYS",
-        help="Days to consider todo-tagged bugs expired if no update happened",
+        help="Days to re-display old expiring bugs (level 1)",
     )
     triage_p.add_argument(
-        "--expire",
+        "--expire-level2",
         type=int,
         metavar="DAYS",
-        help="Days to consider subscribed bugs expired if no update happened",
+        help="Days to re-display ay old expiring bugs (level 2)",
     )
     triage_p.add_argument(
         "--extended",
@@ -192,7 +192,7 @@ GREEN = done
 
     config_setdefaults_p = config_sp.add_parser("set", help="Persist settings to config file")
     config_setdefaults_p.add_argument("--discourse-site", help="Discourse website base URL")
-    config_setdefaults_p.add_argument("--discourse-category", help="Discourse category")
+    config_setdefaults_p.add_argument("--discourse-categories", help="Discourse category (comma separated)")
     config_setdefaults_p.add_argument("--default-team", help="Set general.default_team in config")
     config_setdefaults_p.add_argument(
         "--save-bugs-dir", metavar="PATH", help="Directory to track previous bugs in"
@@ -277,10 +277,10 @@ async def _run_triage(args: argparse.Namespace, config: StarTriageConfig) -> Non
         team = team.model_copy(update={"lp_ignore_packages": []})
 
     general = config.general
-    if args.expire_tagged is not None:
-        general = general.model_copy(update={"lp_expire_tagged": args.expire_tagged})
-    if args.expire is not None:
-        general = general.model_copy(update={"lp_expire": args.expire})
+    if args.expire_level1 is not None:
+        general = general.model_copy(update={"lp_expire_level1_days": args.expire_level1})
+    if args.expire_level2 is not None:
+        general = general.model_copy(update={"lp_expire_level2_days": args.expire_level2})
     if args.extended is not None:
         general = general.model_copy(update={"lp_extended": args.extended})
     if args.proposed_min_age is not None:
@@ -340,11 +340,11 @@ async def _set_config_settings(args: argparse.Namespace, _config: StarTriageConf
         data.setdefault("general", {})["default_team"] = args.default_team
     if args.discourse_site:
         data.setdefault("general", {})["discourse_site"] = args.discourse_site
-    if args.discourse_category:
+    if args.discourse_categories:
         if not args.team:
-            raise ValueError("error: --discourse-category requires -t/--team")
+            raise ValueError("error: --discourse-categories requires -t/--team")
         team_section = data.setdefault("team", {}).setdefault(args.team, {})
-        team_section["discourse_categories"] = args.discourse_category
+        team_section["discourse_categories"] = args.discourse_categories.split(",")
     if args.save_bugs_dir:
         if not Path(args.save_bugs_dir).is_dir():
             raise ValueError(f"error: --save-bugs-dir {args.save_bugs_dir!r} is not a directory")

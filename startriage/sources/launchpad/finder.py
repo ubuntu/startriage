@@ -136,8 +136,8 @@ def fetch_bugs(
     filter: TaskFilterOptions,
     mode: FetchMode,
     update_filter: str | None,
-    expire_tagged_days: int = 60,
-    expire_days: int = 180,
+    expire_level1_days: int = 60,
+    expire_level2_days: int = 180,
 ) -> LaunchpadTasks:
     """Synchronous LP fetch - run inside asyncio.to_thread().
 
@@ -241,7 +241,7 @@ def fetch_bugs(
     expiring_subscribed: list[Task] = []
     if mode == FetchMode.triage and filter.show_expiration and filter.start and filter.end:
 
-        def _expiring_window(days: int, tags: list[str], statuses: list[str]) -> list[Task]:
+        def _expiring_window(days: int) -> list[Task]:
             shift = timedelta(days=days)
             w_start = filter.start - shift
             w_end = filter.end - shift
@@ -251,10 +251,8 @@ def fetch_bugs(
                 for t in _search_tasks_all_series(
                     ubuntu,
                     modified_since=w_start,
-                    bug_subscriber=team,
-                    tags=tags,
-                    tags_combinator="All",
-                    status=statuses,
+                    structural_subscriber=team,
+                    status=OPEN_BUG_STATUSES,
                 )
             }
             since_end = {
@@ -262,10 +260,8 @@ def fetch_bugs(
                 for t in _search_tasks_all_series(
                     ubuntu,
                     modified_since=w_end,
-                    bug_subscriber=team,
-                    tags=tags,
-                    tags_combinator="All",
-                    status=statuses,
+                    structural_subscriber=team,
+                    status=OPEN_BUG_STATUSES,
                 )
             }
             result = []
@@ -279,21 +275,13 @@ def fetch_bugs(
                 result.append(Task(lp_task, subscribed=True, last_activity_ours=is_ours, expiring=True))
             return result
 
-        logging.info("Fetching expiring tagged bugs (~%d days ago)\u2026", expire_tagged_days)
-        expiring_tagged = _expiring_window(
-            expire_tagged_days,
-            [team_config.lp_todo_tag, "-bot-stop-nagging"],
-            OPEN_BUG_STATUSES,
-        )
-        logging.info("Launchpad: %d expiring tagged bugs.", len({t.number for t in expiring_tagged}))
+        logging.info("Fetching expiring bugs level 1 (~%d days ago)\u2026", expire_level1_days)
+        expiring_tagged = _expiring_window(expire_level1_days)
+        logging.info("Launchpad: %d expiring level-1 bugs.", len({t.number for t in expiring_tagged}))
 
-        logging.info("Fetching expiring subscribed bugs (~%d days ago)\u2026", expire_days)
-        expiring_subscribed = _expiring_window(
-            expire_days,
-            ["-bot-stop-nagging", f"-{team_config.lp_todo_tag}"],
-            OPEN_BUG_STATUSES,
-        )
-        logging.info("Launchpad: %d expiring subscribed bugs.", len({t.number for t in expiring_subscribed}))
+        logging.info("Fetching expiring bugs level 2 (~%d days ago)\u2026", expire_level2_days)
+        expiring_subscribed = _expiring_window(expire_level2_days)
+        logging.info("Launchpad: %d expiring level-2 bugs.", len({t.number for t in expiring_subscribed}))
 
     active_series = [s.name for s in ubuntu.series_collection if s.active]
 

@@ -238,15 +238,15 @@ async def _print_old_bugs(
         case OutputFormat.TERMINAL:
             for label, exp_tasks, days, order_by_date in [
                 (
-                    "Expiring tagged",
+                    "Expiring level 1",
                     expiring_tagged,
-                    config.lp_expire_tagged,
+                    config.lp_expire_level1_days,
                     False,
                 ),
                 (
-                    "Expiring subscribed",
+                    "Expiring level 2",
                     expiring_subscribed,
-                    config.lp_expire,
+                    config.lp_expire_level2_days,
                     True,
                 ),
             ]:
@@ -289,8 +289,8 @@ async def find(
         filter,
         mode,
         effective_update_filter,
-        config.general.lp_expire_tagged,
-        config.general.lp_expire,
+        config.general.lp_expire_level1_days,
+        config.general.lp_expire_level2_days,
     )
     logging.info("Launchpad: %d bugs fetched. Checking unapproved queue…", len(lp_tasks.tasks))
 

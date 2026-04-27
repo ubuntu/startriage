@@ -23,7 +23,8 @@ COLOR_STATUS_DONE = "\033[0;32m"  # green
 COLOR_STATUS_OPEN = "\033[0;31m"  # red
 COLOR_RESET = "\033[0m"
 
-LONG_URL_ROOT = "https://bugs.launchpad.net/ubuntu/+bug/"
+_LP_BUG_URL_ROOT = "https://bugs.launchpad.net/ubuntu/+bug/"
+_LP_SOURCE_URL = "https://launchpad.net/ubuntu/+source/{pkg}"
 LPBUGREF = "LP: #"
 
 # Visual width of the Release column in the triage table.
@@ -121,7 +122,7 @@ class Task:
 
     @property
     def url(self) -> str:
-        return LONG_URL_ROOT + self.number
+        return _LP_BUG_URL_ROOT + self.number
 
     @property
     def bug_reference(self) -> str:
@@ -220,7 +221,7 @@ class Task:
         newbug: bool = False,
     ) -> str:
         bug_ref = self.bug_reference if shortlinks else self.url
-        fmt_len = bugid_len + len(LPBUGREF if shortlinks else LONG_URL_ROOT)
+        fmt_len = bugid_len + len(LPBUGREF if shortlinks else _LP_BUG_URL_ROOT)
         bug_str = hyperlink(self.url, f"%-{fmt_len}s" % bug_ref)
 
         # split up distro tasks to multiple lines if necessary.
@@ -233,12 +234,12 @@ class Task:
         def _release_col(chunk: list[str]) -> str:
             return "".join(chunk) + " " * (_RELEASE_COL_WIDTH - len(chunk))
 
-        text = "%-12s | %6s | %s | %-13s | %-19s |" % (
+        text = "%-12s | %6s | %s | %-13s | %s |" % (
             bug_str,
             self.get_flags(ctx, newbug),
             _release_col(chunks[0]),
             self.status,
-            truncate_string(self.src, 19),
+            hyperlink(_LP_SOURCE_URL.format(pkg=self.src), truncate_string(self.src, 19), pad=19),
         )
         if extended:
             text += " %8s | %-10s | %-13s |" % (

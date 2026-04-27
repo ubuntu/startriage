@@ -46,8 +46,11 @@ class TriageResult(ABC):
 
 
 @lru_cache(maxsize=256)
-def hyperlink(url: str, text: str, fmt: OutputFormat = OutputFormat.TERMINAL) -> str:
+def hyperlink(
+    url: str, text: str, fmt: OutputFormat = OutputFormat.TERMINAL, pad_right: int | None = None
+) -> str:
     """Format text as a hyperlink for the given output format.
+    pad_right: pad the resulting string, but the clickable surface remains just text.
 
     Terminal: ANSI OSC8 escape sequence (only when stdout is a TTY).
     Markdown: [text](url)
@@ -59,7 +62,11 @@ def hyperlink(url: str, text: str, fmt: OutputFormat = OutputFormat.TERMINAL) ->
             if os.isatty(sys.stdout.fileno()):
                 osc8 = "\x1b]8"
                 st = "\x1b\\"
-                return f"{osc8};;{url}{st}{text}{osc8};;{st}"
+                padding = ""
+                if pad_right is not None:
+                    padding_len = max(0, pad_right - len(text))
+                    padding = " " * padding_len
+                return f"{osc8};;{url}{st}{text}{osc8};;{st}{padding}"
             return text
         case _:
             raise NotImplementedError
