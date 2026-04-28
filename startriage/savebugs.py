@@ -43,13 +43,13 @@ class BugPersistor:
     """Manages loading, accumulating, and flushing bug state for one run.
 
     Usage::
-        handler = get_bug_persistor(general_config.savebugs_dir, ...)
-        former_lp = handler.former_bugs("launchpad")
-        former_gh = handler.former_bugs("github")
-        # ... render bugs, pass handler to print functions ...
-        handler.record("launchpad", reported_lp_ids)
-        handler.record("github", reported_gh_ids)
-        handler.save()
+        persistor = BugPersistor(general_config.savebugs_dir)
+        former_lp = persistor.former_bugs("launchpad")
+        former_gh = persistor.former_bugs("github")
+        # ... render bugs, pass persistor to print functions ...
+        persistor.record("launchpad", reported_lp_ids)
+        persistor.record("github", reported_gh_ids)
+        persistor.save()
     """
 
     def __init__(
