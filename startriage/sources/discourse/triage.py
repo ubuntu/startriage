@@ -204,7 +204,7 @@ class DiscourseTriage(TriageResult):
             case OutputFormat.MARKDOWN:
                 link = hyperlink(topic_url, name.strip(), cfg.fmt)
                 date_str = f" {date_updated.strftime('%Y-%m-%d')}" if date_updated else ""
-                print(f"### {status_str}{link}{date_str}", file=cfg.out)
+                print(f"#### {status_str}{link}{date_str}", file=cfg.out)
 
             case OutputFormat.TERMINAL:
                 if cfg.terminal_links:

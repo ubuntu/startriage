@@ -90,7 +90,7 @@ class GithubTriage(TriageResult):
                 case OutputFormat.MARKDOWN:
                     entry_link = hyperlink(entry.url, f"{entry.item_type} {item_key}", cfg.fmt)
                     print(
-                        f"### {entry_link}: {truncate_string(entry.item.title, 50)}\n",
+                        f"#### {entry_link}: {truncate_string(entry.item.title, 50)}\n",
                         file=cfg.out,
                     )
                 case OutputFormat.TERMINAL:

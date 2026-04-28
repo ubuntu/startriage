@@ -38,7 +38,7 @@ def _version_link(pkg: str, version: str, fmt: OutputFormat) -> str:
 
 
 def _bug_link(bug_id: int, fmt: OutputFormat) -> str:
-    return hyperlink(_LP_BUG_URL.format(bug=bug_id), f"LP:#{bug_id}", fmt)
+    return hyperlink(_LP_BUG_URL.format(bug=bug_id), f"LP#{bug_id}", fmt)
 
 
 def _status_box(exc: MigrationExcuse) -> str:
@@ -125,7 +125,7 @@ class ProposedMigrationTriage(TriageResult):
                 if self.data.generated_date:
                     gen = f"  [generated {self.data.generated_date.strftime('%Y-%m-%d %H:%M')} UTC]"
                 print(f"## Proposed Migration ({count} {plural}){gen}", file=cfg.out)
-                teams_str = ", ".join(self.teams)
+                teams_str = "|".join(self.teams)
                 print(f"filter: teams={teams_str}", file=cfg.out)
                 if not excuses:
                     print("  (none)", file=cfg.out)
@@ -138,16 +138,16 @@ class ProposedMigrationTriage(TriageResult):
                 # triager needs to investigate these; green ones will self-resolve.
                 blocked = [e for e in excuses if not e.is_candidate]
                 if not blocked:
-                    print("*(none blocked)*\n", file=cfg.out)
+                    print("*(none blocked)*", file=cfg.out)
                 else:
                     for exc in blocked:
                         pkg_url = _EXCUSES_URL.format(pkg=exc.package)
                         pkg = hyperlink(pkg_url, exc.package, cfg.fmt)
                         new_v = _version_link(exc.package, exc.new_version, cfg.fmt)
-                        line = f"- {pkg} {new_v}"
+                        line = f"#### {pkg} {new_v}"
                         if exc.bugs:
-                            bug_str = "  ".join(_bug_link(b, cfg.fmt) for b in exc.bugs)
-                            line += f"  {bug_str}"
+                            bug_str = " ".join(_bug_link(b, cfg.fmt) for b in exc.bugs)
+                            line += f" ({bug_str})"
                         print(line, file=cfg.out)
                         print("", file=cfg.out)  # blank line for triager notes
 

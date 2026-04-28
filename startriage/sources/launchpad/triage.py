@@ -167,7 +167,7 @@ async def _print_bugs(
             case OutputFormat.MARKDOWN:
                 bug_link = hyperlink(primary.url, f"LP #{number}", cfg.fmt)
                 print(
-                    f"### {bug_link} {primary.src} \u2014 {truncate_string(primary.short_title, 80)}",
+                    f"#### {bug_link} {primary.src} \u2014 {truncate_string(primary.short_title, 80)}",
                     file=cfg.out,
                 )
                 print(file=cfg.out)  # blank line as space for triager's report
