@@ -98,7 +98,15 @@ class GithubTriage(TriageResult):
                     repo_col = hyperlink(
                         entry.repo_url, truncate_string(entry.repo, repo_w, pad=True), cfg.fmt
                     )
-                    assignee_col = truncate_string(assignee, assignee_w, pad=True)
+                    assignee_col = (
+                        hyperlink(
+                            f"https://github.com/{assignee}",
+                            truncate_string(assignee, assignee_w),
+                            pad_right=assignee_w,
+                        )
+                        if assignee
+                        else " " * assignee_w
+                    )
                     row_str = f"{link} | {entry.item_type:<{type_w}} | {repo_col} | {assignee_col}"
                     print(f"{row_str} | {date_str} | {truncate_string(entry.item.title, 50)}", file=cfg.out)
                 case _:
@@ -210,6 +218,13 @@ async def find(
         if team_config.lp_todo_tag:
             team_label_list = [team_config.lp_todo_tag]
 
+    if mode == FetchMode.triage:
+        start = filter.start
+        end = filter.end
+    else:
+        start = None
+        end = None
+
     async with aiohttp.ClientSession(headers=headers) as session:
         tasks = []
         for repo in team_config.github_repos:
@@ -224,11 +239,11 @@ async def find(
                 fetch_repo(
                     session,
                     repo.name,
-                    filter.start,
-                    filter.end,
+                    start=start,
+                    end=end,
                     labels=labels,
                 )
             )
         results = await asyncio.gather(*tasks)
 
-    return GithubTriage(start=filter.start, end=filter.end, results=results, mode=mode)
+    return GithubTriage(start=start, end=end, results=results, mode=mode)

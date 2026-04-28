@@ -119,24 +119,24 @@ async def run_triage(
 
 async def run_todo(
     config: StarTriageConfig,
-    opts: TaskFilterOptions,
+    filter: TaskFilterOptions,
     output_cfg: OutputConfig,
     subscribed: bool = False,
 ) -> None:
     """Todo / housekeeping triage: tag-filtered bugs, no date filter.
 
-    All sources in *opts.sources* are optional — pass a subset to fetch only
+    All sources in *filter.sources* are optional — pass a subset to fetch only
     that source.  *subscribed* only controls LP fetch mode (subscription list
     vs. todo tag); GitHub is filtered by label regardless.
     """
     mode = FetchMode.subscribed if subscribed else FetchMode.todo
 
     if output_cfg.fmt == OutputFormat.TERMINAL:
-        print(f"bug housekeeping for team {opts.team!r}\n")
+        print(f"bug housekeeping for team {filter.team!r}\n")
 
     fetch_tasks: dict[str, asyncio.Task[TriageResult]] = {}
-    for source in opts.sources:
-        fetch_tasks[source.name] = asyncio.create_task(source.find(config, opts, mode))
+    for source in filter.sources:
+        fetch_tasks[source.name] = asyncio.create_task(source.find(config, filter, mode))
 
     if output_cfg.bug_persistor is not None:
         results = await _output_results(output_cfg, fetch_tasks)

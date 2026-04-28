@@ -271,8 +271,8 @@ async def _run() -> None:
 
 
 async def _run_triage(args: argparse.Namespace, config: StarTriageConfig) -> None:
-    opts = _filter_from_args(config, args)
-    team = config.get_team(opts.team)
+    filter = _filter_from_args(config, args)
+    team = config.get_team(filter.team)
     if args.no_ignore_list:
         team = team.model_copy(update={"lp_ignore_packages": []})
 
@@ -294,14 +294,14 @@ async def _run_triage(args: argparse.Namespace, config: StarTriageConfig) -> Non
         terminal_links=not args.fullurls,
         markdown_path=Path(args.markdown) if args.markdown else None,
     )
-    await run_triage(config, opts, output_cfg)
+    await run_triage(config, filter, output_cfg)
 
 
 async def _run_todo(args: argparse.Namespace, config: StarTriageConfig) -> None:
     if args.flag_recent is None and not args.subscribed:
         args.flag_recent = 6  # default flag-recent for todo mode
 
-    opts = _filter_from_args(config, args, source_filter={"launchpad", "github"})
+    filter = _filter_from_args(config, args, source_filter={"launchpad", "github"})
 
     save_cfg = SaveConfig(
         savebugs_dir=Path(args.save_bugs_dir) if args.save_bugs_dir else config.general.savebugs_dir,
@@ -321,7 +321,7 @@ async def _run_todo(args: argparse.Namespace, config: StarTriageConfig) -> None:
 
     await run_todo(
         config,
-        opts,
+        filter,
         output_cfg=output_cfg,
         subscribed=args.subscribed,
     )

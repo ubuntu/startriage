@@ -25,6 +25,7 @@ COLOR_RESET = "\033[0m"
 
 _LP_BUG_URL_ROOT = "https://bugs.launchpad.net/ubuntu/+bug/"
 _LP_SOURCE_URL = "https://launchpad.net/ubuntu/+source/{pkg}"
+_LP_USER_URL = "https://launchpad.net/~{user}"
 LPBUGREF = "LP: #"
 
 # Visual width of the Release column in the triage table.
@@ -242,10 +243,17 @@ class Task:
             hyperlink(_LP_SOURCE_URL.format(pkg=self.src), truncate_string(self.src, 19), pad_right=19),
         )
         if extended:
-            text += " %8s | %-10s | %-13s |" % (
+            assignee_col = (
+                hyperlink(
+                    _LP_USER_URL.format(user=self.assignee), truncate_string(self.assignee, 13), pad_right=13
+                )
+                if self.assignee
+                else " " * 13
+            )
+            text += " %8s | %-10s | %s |" % (
                 self.date_last_updated.strftime("%y-%m-%d"),
                 self.importance,
-                truncate_string(self.assignee or "", 12),
+                assignee_col,
             )
         text += " %-60s |" % truncate_string(self.short_title, 60)
 

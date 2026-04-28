@@ -27,7 +27,7 @@ class Spinner:
         pending: set[str],
         *,
         out: Callable[[str], None] | None = None,
-        interval: float = 1/10,  # 10 FPS
+        interval: float = 1 / 10,  # 10 FPS
     ) -> None:
         self._pending = set(pending)
         if out:

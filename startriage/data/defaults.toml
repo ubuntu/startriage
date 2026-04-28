@@ -2,10 +2,10 @@
 lp_expire_level1_days = 60
 lp_expire_level2_days = 180
 lp_triage_updates = "theirs"
-#savebugs_dir = ~/src/ubuntu/mnt/savebugs/
-#default_team = automatic if 1 defined
+#savebugs_dir = "~/src/ubuntu/mnt/savebugs/"
 #proposed_min_age = 4
-#lp_extended = depends on mode
+#default_team = # automatic if 1 defined
+#lp_extended = # depends on mode
 
 [team.ubuntu-server]
 lp_team = "ubuntu-server"

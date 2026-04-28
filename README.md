@@ -55,14 +55,17 @@ Run `startriage triage --help` for the full option reference, including the bug 
 
 ## Configuration
 
-Config file: `~/.config/startriage.toml`
+adjust [the defaults](startriage/data/defaults.toml) with your user configuration file:
+
+- for the snap: `~/snap/startriage/current/.config/startriage.toml`
+- otherwise: `~/.config/startriage.toml`
+
 
 ```toml
 [general]
 lp_triage_updates = "theirs"   # theirs | ours | all
-lp_extended = false            # show date/priority/assignee columns by default
-savebugs_dir = "~/your-path-to-savebugs"
 default_team = "ubuntu-server"
+savebugs_dir = "~/your-path-to-persisting-bug-progress"
 
 [team.ubuntu-server]
 lp_team = "ubuntu-server"
@@ -86,12 +89,15 @@ startriage config set --default-team ubuntu-server
 ## Save / Compare Bug Lists
 
 ```bash
+# Auto-save and auto-compare (uses the most recent file in startriage.toml general.savebugs_dir)
+startriage todo
+
+# specify directory to save/compare todo-$(date) files with current bugs (override for general.savebugs_dir)
+startriage todo --save-bugs-dir ~/savebugs
+
 # Save today's todo list
 startriage todo -S ~/savebugs/todo-$(date -I).yaml
 
 # Compare against a previous save to spot new and closed bugs
 startriage todo -C ~/savebugs/todo-2026-04-01.yaml
-
-# Auto-save and auto-compare (uses the most recent file in savebugs_dir)
-startriage todo
 ```
