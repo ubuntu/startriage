@@ -239,7 +239,7 @@ class Task:
             self.get_flags(ctx, newbug),
             _release_col(chunks[0]),
             self.status,
-            hyperlink(_LP_SOURCE_URL.format(pkg=self.src), truncate_string(self.src, 19), pad=19),
+            hyperlink(_LP_SOURCE_URL.format(pkg=self.src), truncate_string(self.src, 19), pad_right=19),
         )
         if extended:
             text += " %8s | %-10s | %-13s |" % (
