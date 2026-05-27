@@ -10,13 +10,13 @@ from datetime import date
 
 import aiohttp
 
-from ...config import GithubRepoConfig, StarTriageConfig
+from ...config import StarTriageConfig
 from ...enums import FetchMode
 from ...output import OutputConfig, OutputFormat, TriageResult, hyperlink, truncate_string
 from ...savebugs import BugPersistor
 from ...source import TaskFilterOptions
 from .auth import get_github_token
-from .finder import _make_headers, fetch_repo
+from .finder import _make_headers, fetch_repos
 from .models import GithubItemEntry, GitHubItemType, RepoResult
 
 logger = logging.getLogger(__name__)
@@ -236,30 +236,18 @@ async def find(
         start = None
         end = None
 
-    # paralellism cap to avoid github rate limits
-    sem = asyncio.Semaphore(5)
+    # Build list of (repo_name, labels) for batch fetching
+    repo_specs: list[tuple[str, list[str] | None]] = []
+    for repo_cfg in team_config.github_repos:
+        labels = None
+        if mode == FetchMode.todo:
+            if repo_cfg.todo_labels is not None:
+                labels = repo_cfg.todo_labels
+            else:
+                labels = team_label_list
+        repo_specs.append((repo_cfg.name, labels))
 
     async with aiohttp.ClientSession(headers=headers) as session:
-
-        async def _fetch_repo(repo_cfg: GithubRepoConfig) -> RepoResult:
-            labels = None
-            if mode == FetchMode.todo:
-                if repo_cfg.todo_labels is not None:
-                    labels = repo_cfg.todo_labels
-                else:
-                    labels = team_label_list
-            async with sem:
-                return await fetch_repo(
-                    session,
-                    mode,
-                    repo_cfg.name,
-                    start=start,
-                    end=end,
-                    labels=labels,
-                )
-
-        tasks = [_fetch_repo(r) for r in team_config.github_repos]
-
-        results = await asyncio.gather(*tasks)
+        results = await fetch_repos(session, repo_specs, mode, start, end)
 
     return GithubTriage(start=start, end=end, results=results, mode=mode)

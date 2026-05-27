@@ -78,7 +78,7 @@ class TestGraphQL:
         session.post.return_value.__aenter__ = AsyncMock(return_value=response)
         session.post.return_value.__aexit__ = AsyncMock(return_value=False)
 
-        with pytest.raises(RuntimeError, match="GitHub GraphQL HTTP 403"):
+        with pytest.raises(RuntimeError, match="HTTP 403"):
             await _graphql(session, "query {}", {})
 
     async def test_non_200_raises_runtime_error(self):
@@ -89,7 +89,7 @@ class TestGraphQL:
         session.post.return_value.__aenter__ = AsyncMock(return_value=response)
         session.post.return_value.__aexit__ = AsyncMock(return_value=False)
 
-        with pytest.raises(RuntimeError, match="GitHub GraphQL HTTP 500"):
+        with pytest.raises(RuntimeError, match="HTTP 500"):
             await _graphql(session, "query {}", {})
 
 

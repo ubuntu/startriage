@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import dataclass, field
 from datetime import datetime
-from enum import StrEnum
-from typing import cast
 
 import aiohttp
 
@@ -19,54 +18,17 @@ logger = logging.getLogger(__name__)
 
 _GH_GRAPHQL = "https://api.github.com/graphql"
 
-_ISSUES_QUERY = """
-query RepoIssues(
-  $owner: String!, $name: String!, $since: DateTime!, $states: [IssueState!]!, $cursor: String
-) {
-  repository(owner: $owner, name: $name) {
-    issues(
-      first: 100, states: $states, orderBy: {field: UPDATED_AT, direction: DESC},
-      filterBy: {since: $since}, after: $cursor
-    ) {
+_ITEM_FIELDS = """\
       pageInfo { hasNextPage endCursor }
       nodes {
         number title url state createdAt updatedAt closedAt lastEditedAt
         labels(first: 20) { nodes { name } }
         assignees(first: 1) { nodes { login } }
         comments(last: 1) { nodes { updatedAt } }
-        timelineItems(itemTypes: [REOPENED_EVENT], last: 1) { nodes { ... on ReopenedEvent { createdAt } } }
-      }
-    }
-  }
-}
-"""
-
-_PRS_QUERY = """
-query RepoPRs(
-  $owner: String!, $name: String!, $states: [PullRequestState!]!, $cursor: String
-) {
-  repository(owner: $owner, name: $name) {
-    pullRequests(
-      first: 100, states: $states, orderBy: {field: UPDATED_AT, direction: DESC},
-      after: $cursor
-    ) {
-      pageInfo { hasNextPage endCursor }
-      nodes {
-        number title url state createdAt updatedAt closedAt lastEditedAt
-        labels(first: 20) { nodes { name } }
-        assignees(first: 1) { nodes { login } }
-        comments(last: 1) { nodes { updatedAt } }
-        timelineItems(itemTypes: [REOPENED_EVENT], last: 1) { nodes { ... on ReopenedEvent { createdAt } } }
-      }
-    }
-  }
-}
-"""
-
-
-class QueryTarget(StrEnum):
-    issues = "issues"
-    prs = "pullRequests"
+        timelineItems(itemTypes: [REOPENED_EVENT], last: 1) {
+          nodes { ... on ReopenedEvent { createdAt } }
+        }
+      }"""
 
 
 def _make_headers(token: str | None) -> dict[str, str]:
@@ -90,19 +52,29 @@ async def _graphql(
     query: str,
     variables: dict,
 ) -> dict:
-    """Execute a GraphQL query and return the parsed JSON response."""
-    async with session.post(_GH_GRAPHQL, json={"query": query, "variables": variables}) as resp:
-        if resp.status != 200:
-            text = await resp.text()
-            if resp.status == 403 and "rate limit exceeded" in text.lower():
-                raise GitHubRateLimitError()
-            raise RuntimeError(f"GitHub GraphQL HTTP {resp.status}: {text[:200]}")
-        data = await resp.json(content_type=None)
+    """Execute a GraphQL query and return the parsed JSON response.
 
-    if errors := data.get("errors"):
-        raise RuntimeError(f"GitHub GraphQL errors: {errors}")
+    Retries once on 502 (GitHub transient timeout).
+    """
+    max_retries = 2
+    for attempt in range(max_retries):
+        async with session.post(_GH_GRAPHQL, json={"query": query, "variables": variables}) as resp:
+            if resp.status == 502 and attempt < max_retries - 1:
+                logger.debug("GitHub GraphQL 502, retrying (attempt %d)", attempt + 1)
+                await asyncio.sleep(2**attempt)
+                continue
+            if resp.status != 200:
+                text = await resp.text()
+                if resp.status == 403 and "rate limit exceeded" in text.lower():
+                    raise GitHubRateLimitError()
+                raise RuntimeError(f"GitHub GraphQL ({_GH_GRAPHQL}) HTTP {resp.status}: {text[:200]}")
+            data = await resp.json(content_type=None)
 
-    return data["data"]
+        if errors := data.get("errors"):
+            raise RuntimeError(f"GitHub GraphQL errors: {errors}")
+
+        return data["data"]
+    raise RuntimeError("GitHub GraphQL: unreachable")
 
 
 def _is_actionable(
@@ -110,11 +82,7 @@ def _is_actionable(
     start: datetime,
     end: datetime,
 ) -> bool:
-    """True if the item has meaningful activity within [start, end].
-
-    An item updated_at within the window but failing all conditions was
-    touched only by metadata changes (label, assignee, milestone, …).
-    """
+    """True if the item has meaningful activity within [start, end]."""
     return (
         _in_range(item.created_at, start, end)
         or _in_range(item.last_edited_at, start, end)
@@ -124,89 +92,205 @@ def _is_actionable(
     )
 
 
-async def _fetch_items(
-    session: aiohttp.ClientSession,
-    gh_repo: Repo,
-    query_target: QueryTarget,
-    since_str: str,
+@dataclass
+class _RepoFetchState:
+    """Tracks fetch state for one repo across batch iterations."""
+
+    repo: str
+    owner: str
+    name: str
+    gh_repo: Repo
+    since_str: str
+    issue_states: list[str]
+    pr_states: list[str]
+    labels: list[str] | None
+    mode: FetchMode
+    start: datetime | None
+    end: datetime | None
+
+    # Accumulated results
+    issues: list[Issue] = field(default_factory=list)
+    prs: list[PullRequest] = field(default_factory=list)
+
+    # Pagination cursors (None = fetch from start; set after each page)
+    issues_cursor: str | None = None
+    prs_cursor: str | None = None
+
+    # Whether we still need to fetch more pages
+    fetch_issues: bool = True
+    fetch_prs: bool = True
+
+
+def _build_query(states: list[_RepoFetchState], page_size: int = 100) -> str:
+    """Build a GraphQL query for all repos that still need fetching.
+
+    Each repo gets aliased fragments for issues and/or PRs depending on
+    what still needs pages.
+    """
+    fragments: list[str] = []
+    for i, st in enumerate(states):
+        parts: list[str] = []
+
+        # Labels filter only in todo mode (triage shows all activity regardless of labels)
+        labels_arg = _labels_arg(st.labels) if st.mode == FetchMode.todo else ""
+
+        if st.fetch_issues:
+            issue_states_str = ", ".join(st.issue_states)
+            since_arg = f', filterBy: {{since: "{st.since_str}"}}' if st.mode == FetchMode.triage else ""
+            cursor_arg = f', after: "{st.issues_cursor}"' if st.issues_cursor else ""
+            parts.append(
+                f"    issues(first: {page_size}, states: [{issue_states_str}]{labels_arg},"
+                f" orderBy: {{field: UPDATED_AT, direction: DESC}}{since_arg}{cursor_arg}) {{\n"
+                f"{_ITEM_FIELDS}\n    }}"
+            )
+
+        if st.fetch_prs:
+            pr_states_str = ", ".join(st.pr_states)
+            cursor_arg = f', after: "{st.prs_cursor}"' if st.prs_cursor else ""
+            parts.append(
+                f"    pullRequests(first: {page_size}, states: [{pr_states_str}]{labels_arg},"
+                f" orderBy: {{field: UPDATED_AT, direction: DESC}}{cursor_arg}) {{\n"
+                f"{_ITEM_FIELDS}\n    }}"
+            )
+
+        fragments.append(
+            f'  repo{i}: repository(owner: "{st.owner}", name: "{st.name}") {{\n'
+            + "\n".join(parts)
+            + "\n  }"
+        )
+
+    return "query Batch {\n" + "\n".join(fragments) + "\n}"
+
+
+def _labels_arg(labels: list[str] | None) -> str:
+    if not labels:
+        return ""
+    return ", labels: [" + ", ".join(f'"{lbl}"' for lbl in labels) + "]"
+
+
+def _process_connection(
+    conn: dict,
+    from_node,
+    repo_url: str,
     mode: FetchMode,
     start: datetime | None,
     end: datetime | None,
-    labels: list[str] | None,
-) -> list[Issue] | list[PullRequest]:
+) -> tuple[list, bool, str | None]:
+    """Parse a connection response: filter nodes and determine pagination state.
+
+    Returns (items, needs_more_pages, end_cursor).
+    """
+    nodes = conn.get("nodes") or []
+    page_info = conn.get("pageInfo") or {}
+    has_next = page_info.get("hasNextPage", False)
+    end_cursor = page_info.get("endCursor")
+
     items: list = []
-    cursor: str | None = None
+    exhausted = False
+    for node in nodes:
+        item = from_node(node, repo_url)
+        if mode == FetchMode.triage:
+            assert start is not None and end is not None
+            if not _in_range(item.updated_at, start, end):
+                exhausted = True
+                break
+            if not _is_actionable(item, start, end):
+                continue
+        items.append(item)
 
-    match query_target:
-        case QueryTarget.issues:
-            logger.debug("Fetching issues for %s/%s", gh_repo.owner, gh_repo.name)
-            query = _ISSUES_QUERY
-            from_node = Issue.from_graphql_node
-        case QueryTarget.prs:
-            logger.debug("Fetching PRs for %s/%s", gh_repo.owner, gh_repo.name)
-            query = _PRS_QUERY
-            from_node = PullRequest.from_graphql_node
-
-        case _:
-            raise NotImplementedError
-
-    # In todo mode, closed items can still have the todo label; only subscribed gets OPEN-only.
-    # For PRs, also include MERGED to catch closed/merged PRs with todo labels.
-    if mode == FetchMode.subscribed:
-        states = ["OPEN"]
-    else:
-        match query_target:
-            case QueryTarget.prs:
-                states = ["OPEN", "CLOSED", "MERGED"]
-            case QueryTarget.issues:
-                states = ["OPEN", "CLOSED"]
-            case _:
-                raise NotImplementedError
-
-    while True:
-        variables: dict = {"owner": gh_repo.owner, "name": gh_repo.name, "states": states, "cursor": cursor}
-        if query_target == QueryTarget.issues:
-            variables["since"] = since_str
-        data = await _graphql(session, query, variables)
-        conn = (data.get("repository") or {}).get(query_target.value) or {}
-        for node in conn.get("nodes") or []:
-            item = from_node(node, gh_repo.url)
-            if mode == FetchMode.triage:
-                assert start is not None and end is not None
-                if not _in_range(item.updated_at, start, end):
-                    return items  # sorted DESC; nothing further in range
-                if not _is_actionable(item, start, end):
-                    logging.debug(
-                        "Skipping %s/%s#%s: metadata-only update",
-                        gh_repo.owner,
-                        gh_repo.name,
-                        item.number,
-                    )
-                    continue
-            if labels is None or any(lbl in item.labels for lbl in labels):
-                items.append(item)
-        page_info = conn.get("pageInfo") or {}
-        if not page_info.get("hasNextPage"):
-            break
-        cursor = page_info["endCursor"]
-    return items
+    needs_more = has_next and not exhausted
+    return items, needs_more, end_cursor
 
 
-async def fetch_repo(
+async def fetch_repos(
     session: aiohttp.ClientSession,
+    repos: list[tuple[str, list[str] | None]],
     mode: FetchMode,
-    repo: str,
     start: datetime | None,
     end: datetime | None,
-    labels: list[str] | None = None,
-) -> RepoResult:
-    """Fetch PRs and Issues for one repo via GraphQL, concurrently."""
-    owner, name = repo.split("/", 1)
-    gh_repo = Repo(owner=owner, name=name, url=f"https://github.com/{repo}")
-    since_str = start.strftime("%Y-%m-%dT%H:%M:%SZ") if start else "1970-01-01T00:00:00Z"
+) -> list[RepoResult]:
+    """Fetch issues and PRs for multiple repos via batched GraphQL queries.
 
-    issues, prs = await asyncio.gather(
-        _fetch_items(session, gh_repo, QueryTarget.issues, since_str, mode, start, end, labels),
-        _fetch_items(session, gh_repo, QueryTarget.prs, since_str, mode, start, end, labels),
-    )
-    return RepoResult(repo, cast(list[PullRequest], prs), cast(list[Issue], issues), labels=labels)
+    Uses a single unified query-building approach: the initial fetch and any
+    subsequent pagination pages are all handled by the same batch builder,
+    looping until no repos need more pages.
+    """
+    since_str = start.strftime("%Y-%m-%dT%H:%M:%SZ") if start else ""
+
+    # Build initial state for each repo
+    all_states: list[_RepoFetchState] = []
+    for repo_name, labels in repos:
+        owner, name = repo_name.split("/", 1)
+        gh_repo = Repo(owner=owner, name=name, url=f"https://github.com/{repo_name}")
+        if mode == FetchMode.subscribed:
+            issue_states = ["OPEN"]
+            pr_states = ["OPEN"]
+        else:
+            issue_states = ["OPEN", "CLOSED"]
+            pr_states = ["OPEN", "CLOSED", "MERGED"]
+        all_states.append(
+            _RepoFetchState(
+                repo=repo_name,
+                owner=owner,
+                name=name,
+                gh_repo=gh_repo,
+                since_str=since_str,
+                issue_states=issue_states,
+                pr_states=pr_states,
+                labels=labels,
+                mode=mode,
+                start=start,
+                end=end,
+            )
+        )
+
+    # Triage queries are heavier (no label filter, all PR states) — use smaller batches.
+    # Todo/subscribed has server-side label filtering so can handle more repos per query.
+    batch_size = 3 if mode == FetchMode.triage else 10
+    for batch_offset in range(0, len(all_states), batch_size):
+        batch = all_states[batch_offset : batch_offset + batch_size]
+
+        # Loop until no repo in this batch needs more pages
+        while any(st.fetch_issues or st.fetch_prs for st in batch):
+            # Only include repos that still need fetching
+            active = [st for st in batch if st.fetch_issues or st.fetch_prs]
+            if not active:
+                break
+
+            logger.debug("building query for batch offset %d, active repos: %s",
+                          batch_offset, [st.repo for st in active])
+            query = _build_query(active)
+
+            logger.debug("querying github...")
+            data = await _graphql(session, query, {})
+
+            logger.debug("processing response...")
+            for i, st in enumerate(active):
+                repo_data = data.get(f"repo{i}") or {}
+
+                if st.fetch_issues:
+                    issues_conn = repo_data.get("issues") or {}
+                    items, needs_more, cursor = _process_connection(
+                        issues_conn, Issue.from_graphql_node, st.gh_repo.url,
+                        st.mode, st.start, st.end,
+                    )
+                    st.issues.extend(items)
+                    st.issues_cursor = cursor
+                    st.fetch_issues = needs_more
+
+                if st.fetch_prs:
+                    prs_conn = repo_data.get("pullRequests") or {}
+                    items, needs_more, cursor = _process_connection(
+                        prs_conn, PullRequest.from_graphql_node, st.gh_repo.url,
+                        st.mode, st.start, st.end,
+                    )
+                    st.prs.extend(items)
+                    st.prs_cursor = cursor
+                    st.fetch_prs = needs_more
+
+    return [
+        RepoResult(
+            st.repo, st.prs, st.issues, labels=st.labels,
+        )
+        for st in all_states
+    ]
