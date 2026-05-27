@@ -110,3 +110,15 @@ def test_extra_field_rejected(tmp_path):
     )
     with pytest.raises(ValidationError):
         load_config(p)
+
+
+def test_github_token_config(tmp_path):
+    p = _write_toml(
+        tmp_path,
+        """\
+        [general]
+        github_token = "ghp_secret"
+    """,
+    )
+    config = load_config(p)
+    assert config.general.github_token == "ghp_secret"

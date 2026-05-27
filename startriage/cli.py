@@ -4,21 +4,18 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import logging
 import sys
-import tomllib
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-import tomli_w
-
-from .config import DEFAULT_USER_CONFIG, StarTriageConfig, load_config, resolve_team_name
+from .config import StarTriageConfig, load_config, resolve_team_name, update_user_config
 from .dates import parse_interval, triage_task_date_range
 from .enums import UpdateFilter
 from .log import log_setup
 from .output import OutputConfig, OutputFormat
 from .savebugs import BugPersistor, SaveConfig
 from .source import TaskFilterOptions
+from .sources.github.auth import _run_github_login
 from .triage import SOURCES, resolve_sources, run_todo, run_triage
 
 
@@ -203,10 +200,25 @@ GREEN = done
         metavar="DAYS",
         help="Set days of being stuck in proposed (config's general.proposed_min_age)",
     )
+    config_setdefaults_p.add_argument(
+        "--github-token",
+        metavar="TOKEN",
+        help=(
+            "Set GitHub API token in config (use 'gh' to auto-fetch from GitHub CLI). "
+            "Alternatively set the GITHUB_TOKEN environment variable."
+        ),
+    )
     config_setdefaults_p.set_defaults(func=_set_config_settings)
 
     config_show_p = config_sp.add_parser("show", help="Display resolved configuration")
     config_show_p.set_defaults(func=_show_config)
+
+    # --- github ---
+    github_p = sp.add_parser("github", help="GitHub integration commands")
+    github_sp = github_p.add_subparsers(required=True)
+
+    github_login_p = github_sp.add_parser("login", help="Authenticate with GitHub via device flow")
+    github_login_p.set_defaults(func=_run_github_login)
 
     return parser
 
@@ -326,37 +338,33 @@ async def _run_todo(args: argparse.Namespace, config: StarTriageConfig) -> None:
 
 
 async def _set_config_settings(args: argparse.Namespace, _config: StarTriageConfig) -> None:
-    path = (args.config or DEFAULT_USER_CONFIG).expanduser()
-    try:
-        with open(path, "rb") as f:
-            data = tomllib.load(f)
-    except FileNotFoundError:
-        logging.debug("user config file not found at %s, using defaults.", path)
-        data = {}
+    updates: dict[str, dict] = {}
 
     if args.default_team:
-        data.setdefault("general", {})["default_team"] = args.default_team
+        updates.setdefault("general", {})["default_team"] = args.default_team
     if args.discourse_site:
-        data.setdefault("general", {})["discourse_site"] = args.discourse_site
+        updates.setdefault("general", {})["discourse_site"] = args.discourse_site
     if args.discourse_categories:
         if not args.team:
             raise ValueError("error: --discourse-categories requires -t/--team")
-        team_section = data.setdefault("team", {}).setdefault(args.team, {})
-        team_section["discourse_categories"] = args.discourse_categories.split(",")
+        updates.setdefault("team", {}).setdefault(args.team, {})["discourse_categories"] = (
+            args.discourse_categories.split(",")
+        )
     if args.save_bugs_dir:
         if not Path(args.save_bugs_dir).is_dir():
             raise ValueError(f"error: --save-bugs-dir {args.save_bugs_dir!r} is not a directory")
-        data.setdefault("general", {})["savebugs_dir"] = args.save_bugs_dir
+        updates.setdefault("general", {})["savebugs_dir"] = args.save_bugs_dir
     if args.proposed_min_age is not None:
-        data.setdefault("general", {})["proposed_min_age"] = args.proposed_min_age
+        updates.setdefault("general", {})["proposed_min_age"] = args.proposed_min_age
+    if args.github_token is not None:
+        updates.setdefault("general", {})["github_token"] = args.github_token
 
-    if not data:
+    if not updates:
         print("No settings to update.")
         return
 
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "wb") as f:
-        tomli_w.dump(data, f)
+    sensitive = "github_token" in updates.get("general", {})
+    path = update_user_config(updates, config_path=args.config, sensitive=sensitive)
     print(f"Settings saved to {path!r}")
 
 

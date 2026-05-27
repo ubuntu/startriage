@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import webbrowser
 from dataclasses import dataclass, field
 from datetime import date
@@ -14,9 +15,11 @@ from ...enums import FetchMode
 from ...output import OutputConfig, OutputFormat, TriageResult, hyperlink, truncate_string
 from ...savebugs import BugPersistor
 from ...source import TaskFilterOptions
-from .finder import _make_headers, fetch_repo, get_github_token
+from .auth import get_github_token
+from .finder import _make_headers, fetch_repo
 from .models import GithubItemEntry, GitHubItemType, RepoResult
 
+logger = logging.getLogger(__name__)
 
 @dataclass
 class GithubTriage(TriageResult):
@@ -212,7 +215,11 @@ async def find(
 ) -> GithubTriage:
     """Fetch GitHub data for all repos concurrently."""
 
-    token = get_github_token()
+    token = get_github_token(config.general.github_token)
+    if token:
+        logger.debug("fetching github data using github token")
+    else:
+        logger.debug("fetching github data through anonymous access")
 
     team_config = config.get_team(filter.team)
     headers = _make_headers(token)

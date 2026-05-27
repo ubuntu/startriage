@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
-import subprocess
 from datetime import datetime
 from enum import StrEnum
 from typing import cast
@@ -14,12 +12,12 @@ import aiohttp
 
 from startriage.enums import FetchMode
 
+from .auth import GitHubRateLimitError
 from .models import Issue, PullRequest, Repo, RepoResult
 
 logger = logging.getLogger(__name__)
 
 _GH_GRAPHQL = "https://api.github.com/graphql"
-_GITHUB_TOKEN_ENV = "GITHUB_TOKEN"
 
 _ISSUES_QUERY = """
 query RepoIssues(
@@ -71,26 +69,6 @@ class QueryTarget(StrEnum):
     prs = "pullRequests"
 
 
-def get_github_token() -> str | None:
-    """Return a GitHub token from gh CLI or GITHUB_TOKEN env var, or None."""
-    token = os.environ.get(_GITHUB_TOKEN_ENV)
-    if token:
-        return token
-    try:
-        result = subprocess.run(
-            ["gh", "auth", "token"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            check=False,
-        )
-        if result.returncode == 0:
-            return result.stdout.strip()
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        pass
-    return None
-
-
 def _make_headers(token: str | None) -> dict[str, str]:
     headers = {
         "Accept": "application/vnd.github.v3+json",
@@ -116,6 +94,8 @@ async def _graphql(
     async with session.post(_GH_GRAPHQL, json={"query": query, "variables": variables}) as resp:
         if resp.status != 200:
             text = await resp.text()
+            if resp.status == 403 and "rate limit exceeded" in text.lower():
+                raise GitHubRateLimitError()
             raise RuntimeError(f"GitHub GraphQL HTTP {resp.status}: {text[:200]}")
         data = await resp.json(content_type=None)
 

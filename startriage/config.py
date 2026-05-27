@@ -25,6 +25,7 @@ class GeneralConfig(BaseModel):
     savebugs_dir: Path | None = None
     default_team: str | None = None
     proposed_min_age: int = 4
+    github_token: str | None = None
 
     @model_validator(mode="after")
     def expand_savebugs_dir(self) -> GeneralConfig:
@@ -110,6 +111,38 @@ def _load_toml(path: Path) -> dict:
             return tomllib.load(f)
     except FileNotFoundError:
         return {}
+
+
+def update_user_config(
+    updates: dict,
+    config_path: Path | None = None,
+    *,
+    sensitive: bool = False,
+) -> Path:
+    """Read-modify-write the user config TOML file.
+
+    *updates* is a nested dict merged into the existing config (e.g.
+    ``{"general": {"github_token": "ghp_..."}}``).\n
+    If *sensitive* is True, file permissions are set to 0o600.
+
+    Returns the resolved path that was written.
+    """
+    path = (config_path or DEFAULT_USER_CONFIG).expanduser()
+    data = _load_toml(path)
+
+    # Shallow-merge each top-level section
+    for section, values in updates.items():
+        if isinstance(values, dict):
+            data.setdefault(section, {}).update(values)
+        else:
+            data[section] = values
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "wb") as f:
+        tomli_w.dump(data, f)
+    if sensitive:
+        path.chmod(0o600)
+    return path
 
 
 def _load_defaults(path: Traversable) -> dict:
