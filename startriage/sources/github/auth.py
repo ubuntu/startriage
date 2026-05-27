@@ -12,7 +12,7 @@ import webbrowser
 
 import aiohttp
 
-from startriage.config import StarTriageConfig, update_user_config
+from startriage.config import DEFAULT_USER_CONFIG, StarTriageConfig, update_user_config
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +31,7 @@ class GitHubRateLimitError(RuntimeError):
             "GitHub API rate limit exceeded.\n\n"
             "To authenticate and get a higher rate limit, you can:\n"
             "  1. Run 'startriage github login' to authenticate interactively\n"
-            "  2. Set github_token in ~/.config/startriage.toml through "
+            f"  2. Set github_token in {DEFAULT_USER_CONFIG} through "
             "`startriage config set --github-token <token>`\n"
             "     - get a personal access token from https://github.com/settings/tokens\n"
             "     - the special token value 'gh' fetches a token from the gh CLI dynamically)\n"

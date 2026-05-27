@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import tomllib
 from importlib.resources import files
 from importlib.resources.abc import Traversable
@@ -12,7 +13,15 @@ from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 from .enums import UpdateFilter
 
-DEFAULT_USER_CONFIG = Path("~/.config/startriage.toml")
+
+def default_config_path() -> Path:
+    """Default config path, respecting snap confinement."""
+    if snap_data := os.environ.get("SNAP_USER_DATA"):
+        return Path(snap_data) / ".config" / "startriage.toml"
+    return Path("~/.config/startriage.toml")
+
+
+DEFAULT_USER_CONFIG = default_config_path()
 
 
 class GeneralConfig(BaseModel):

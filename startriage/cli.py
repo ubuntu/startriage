@@ -8,7 +8,7 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from .config import StarTriageConfig, load_config, resolve_team_name, update_user_config
+from .config import DEFAULT_USER_CONFIG, StarTriageConfig, load_config, resolve_team_name, update_user_config
 from .dates import parse_interval, triage_task_date_range
 from .enums import UpdateFilter
 from .log import log_setup
@@ -37,7 +37,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--config",
         metavar="PATH",
         type=Path,
-        help="Path to config TOML (default: ~/.config/startriage.toml)",
+        help=f"Path to config TOML (default: {DEFAULT_USER_CONFIG})",
     )
     parser.add_argument(
         "-v", "--verbose", action="count", default=0, help="Increase logging verbosity (repeatable)"
