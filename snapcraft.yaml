@@ -8,7 +8,7 @@ description: |
 
   For bug housekeeping: `startriage todo`
 
-  Configuration is read from `~/.config/startriage.toml`, where you can set up your team's filters and preferences.
+  Configuration is read from `~/snap/startriage/current/.config/startriage.toml` (snap) or `~/.config/startriage.toml` (non-snap).
 
   https://github.com/ubuntu/startriage
 
@@ -33,6 +33,15 @@ apps:
       - network
       - network-bind
       - home
+      - dot-config-startriage
+
+plugs:
+  dot-config-startriage:
+    interface: personal-files
+    read:
+      - $HOME/.config/startriage.toml
+    write:
+      - $HOME/.config/startriage.toml
 
 parts:
   startriage:
