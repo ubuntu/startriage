@@ -35,14 +35,6 @@ apps:
       - home
       - dot-config-startriage
 
-plugs:
-  dot-config-startriage:
-    interface: personal-files
-    read:
-      - $HOME/.config/startriage.toml
-    write:
-      - $HOME/.config/startriage.toml
-
 parts:
   startriage:
     plugin: python
