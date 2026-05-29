@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 import aiohttp
 import debian.deb822
 import platformdirs
-from launchpadlib.credentials import UnencryptedFileCredentialStore
+from launchpadlib.credentials import AuthorizeRequestTokenWithURL, UnencryptedFileCredentialStore
 from launchpadlib.launchpad import Launchpad
 from lazr.restfulclient.errors import ClientError
 
@@ -58,7 +58,13 @@ def connect_launchpad() -> Launchpad:
 
     logger.debug("logging into launchpad...")
     return Launchpad.login_with(
-        "startriage", "production", version="devel", credential_store=credential_store
+        consumer_name="startriage",
+        service_root="production",
+        version="devel",
+        credential_store=credential_store,
+        # workaround until https://code.launchpad.net/~jj/launchpadlib/+git/launchpadlib/+merge/505695
+        # is released
+        authorization_engine=AuthorizeRequestTokenWithURL("production", consumer_name="startriage"),
     )
 
 
