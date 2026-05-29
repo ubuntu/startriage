@@ -33,7 +33,6 @@ apps:
       - network
       - network-bind
       - home
-      - dot-config-startriage
 
 parts:
   startriage:
