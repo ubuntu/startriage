@@ -18,6 +18,7 @@ from .provider import (
     build_provider,
     build_session_kwargs,
 )
+from .render import render_report, report_filename, write_report
 
 __all__ = [
     "AgentResult",
@@ -33,6 +34,9 @@ __all__ = [
     "extract_json_block",
     "load_system_prompt",
     "parse_agent_result",
+    "render_report",
+    "report_filename",
     "triage_bug",
     "triage_bugs",
+    "write_report",
 ]
