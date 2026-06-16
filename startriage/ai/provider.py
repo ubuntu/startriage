@@ -14,11 +14,14 @@ The only thing that differs between providers is *where* the credential goes:
 
 from __future__ import annotations
 
+import logging
 from abc import ABC, abstractmethod
 from typing import Any
 
 from ..config import AIConfig
 from ..enums import AIProvider
+
+logger = logging.getLogger(__name__)
 
 
 class Provider(ABC):
@@ -66,6 +69,12 @@ def build_session_kwargs(ai_config: AIConfig) -> dict[str, Any]:
     return {}
 
 
+def _log_session_event(event: Any) -> None:
+    """Log a Copilot session step event at DEBUG (subscribed only under -vv)."""
+    event_type = getattr(event, "type", None) or type(event).__name__
+    logger.debug("Copilot session event: %s", event_type)
+
+
 class CopilotProvider(Provider):
     """Real provider backed by the Copilot Python SDK (lazily imported).
 
@@ -86,6 +95,7 @@ class CopilotProvider(Provider):
         from copilot import CopilotClient  # ty: ignore[unresolved-import]
         from copilot.session import PermissionHandler  # ty: ignore[unresolved-import]
 
+        logger.debug("Starting Copilot session (model=%s)", self.model)
         async with CopilotClient(**build_client_kwargs(self._ai_config)) as client:
             async with await client.create_session(
                 on_permission_request=PermissionHandler.approve_all,
@@ -95,6 +105,10 @@ class CopilotProvider(Provider):
                 system_message={"mode": "append", "content": system_prompt},
                 **build_session_kwargs(self._ai_config),
             ) as session:
+                # At -vv, stream the agent's step events (tool calls, reasoning)
+                # so unattended runs are auditable; cheap no-op otherwise.
+                if logger.isEnabledFor(logging.DEBUG):
+                    session.on(_log_session_event)
                 message = await session.send_and_wait(user_message)
                 return (message.data.content or "") if message else ""
 
