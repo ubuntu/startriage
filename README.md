@@ -53,6 +53,39 @@ startriage todo --subscribed
 
 Run `startriage triage --help` for the full option reference, including the bug flags legend.
 
+## AI Triage (experimental)
+
+Run an AI agent over Launchpad bugs to produce a dated `autotriage-YYYY-MM-DD.md`
+report with a suggested status, tags, analysis, and (where applicable) a proposed
+fix. The agent never edits bugs and never applies patches — it only writes the
+report.
+
+```bash
+# Triage one or more specific bugs (URL, NNNNNN, or #NNNNNN)
+startriage ai-triage 2101234 '#2105678'
+
+# Run the normal daily triage, then AI-triage every bug found
+startriage triage --ai
+```
+
+Configure a provider first (credentials are written to the 0600 config, never
+echoed):
+
+```bash
+# Default provider: GitHub Copilot (needs a Copilot-enabled account)
+startriage config set --ai-provider copilot --ai-github-token github_pat_...
+
+# Or bring your own key via an OpenAI-compatible provider (e.g. OpenRouter)
+startriage config set --ai-provider openrouter \
+    --ai-model anthropic/claude-opus-4.1 \
+    --ai-openrouter-key sk-or-...
+```
+
+The Copilot token may also come from `COPILOT_GITHUB_TOKEN` / `GH_TOKEN` /
+`GITHUB_TOKEN`, and the OpenRouter key from `OPENROUTER_API_KEY`. The snap bundles
+the Copilot runtime and `ubuntu-dev-tools`, so source analysis works inside strict
+confinement; from a git checkout install the extra with `uv sync --extra ai`.
+
 ## Configuration
 
 adjust [the defaults](startriage/data/defaults.toml) with your user configuration file:

@@ -29,6 +29,13 @@ grade: stable
 apps:
   startriage:
     command: bin/startriage
+    environment:
+      # The Copilot runtime defaults COPILOT_HOME to ~/.copilot, a hidden path the
+      # `home` plug cannot write to. Point it at SNAP_USER_DATA, always writable.
+      COPILOT_HOME: $SNAP_USER_DATA/.copilot
+      # Expose staged ubuntu-dev-tools helpers (pull-lp-source, debdiff, …) on PATH
+      # so the agent's shell tool can pull and diff package source.
+      PATH: $SNAP/usr/bin:$SNAP/bin:$PATH
     plugs:
       - network
       - network-bind
@@ -39,3 +46,10 @@ parts:
     plugin: python
     source: .
     source-type: git
+    # github-copilot-sdk bundles the Copilot CLI runtime binary it spawns, so no
+    # separate Node part is needed; pip ships the runtime inside the snap.
+    python-packages:
+      - github-copilot-sdk
+    stage-packages:
+      # pull-lp-source / dpkg-source / debdiff for the agent's source analysis.
+      - ubuntu-dev-tools
