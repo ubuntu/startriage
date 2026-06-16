@@ -5,14 +5,22 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
+from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from .config import DEFAULT_USER_CONFIG, StarTriageConfig, load_config, resolve_team_name, update_user_config
+from .config import (
+    DEFAULT_USER_CONFIG,
+    AIConfigError,
+    StarTriageConfig,
+    load_config,
+    resolve_team_name,
+    update_user_config,
+)
 from .dates import parse_interval, triage_task_date_range
 from .enums import AIProvider, UpdateFilter
 from .log import log_setup
-from .output import OutputConfig, OutputFormat
+from .output import OutputConfig, OutputFormat, TriageResult
 from .savebugs import BugPersistor, SaveConfig
 from .source import TaskFilterOptions
 from .sources.github.auth import _run_github_login
@@ -167,6 +175,11 @@ GREEN = done
         metavar="DAYS",
         help="Minimum days of being stuck in proposed to be included in triage",
     )
+    triage_p.add_argument(
+        "--ai",
+        action="store_true",
+        help="Also run AI triage on every bug found, writing autotriage-YYYY-MM-DD.md",
+    )
     triage_p.set_defaults(func=_run_triage)
 
     # --- todo ---
@@ -182,6 +195,19 @@ GREEN = done
     todo_p.add_argument("--no-save", action="store_true", help="Do not actually save bug list to file")
     todo_p.add_argument("-C", "--compare", metavar="PATH", help="Set path to saved file to compare bugs to")
     todo_p.set_defaults(func=_run_todo)
+
+    # --- ai-triage ---
+    ai_triage_p = sp.add_parser(
+        "ai-triage",
+        help="AI-triage one or more Launchpad bugs",
+    )
+    ai_triage_p.add_argument(
+        "bug",
+        nargs="+",
+        metavar="BUG",
+        help="Launchpad bug to triage: full URL, NNNNNN, or #NNNNNN",
+    )
+    ai_triage_p.set_defaults(func=_run_ai_triage)
 
     # --- config ---
     config_p = sp.add_parser("config", help="Manage configuration")
@@ -325,6 +351,14 @@ async def _run() -> None:
 
 
 async def _run_triage(args: argparse.Namespace, config: StarTriageConfig) -> None:
+    provider = None
+    if args.ai:
+        # Validate AI credentials up-front so a misconfig fails before the (slow)
+        # normal triage run rather than after it.
+        provider = _build_ai_provider(config)
+        if provider is None:
+            return
+
     filter = _filter_from_args(config, args)
     team = config.get_team(filter.team)
     if args.no_ignore_list:
@@ -342,7 +376,10 @@ async def _run_triage(args: argparse.Namespace, config: StarTriageConfig) -> Non
     config.general = general
 
     output_cfg = _outputcfg_from_args(args)
-    await run_triage(config, filter, output_cfg)
+    results = await run_triage(config, filter, output_cfg)
+
+    if args.ai:
+        await _ai_triage_results(config, results, provider)
 
 
 async def _run_todo(args: argparse.Namespace, config: StarTriageConfig) -> None:
@@ -366,6 +403,55 @@ async def _run_todo(args: argparse.Namespace, config: StarTriageConfig) -> None:
         output_cfg=output_cfg,
         subscribed=args.subscribed,
     )
+
+
+def _build_ai_provider(config: StarTriageConfig):
+    """Build the AI provider, printing a friendly hint and returning None on misconfig."""
+    from .ai import build_provider
+
+    try:
+        return build_provider(config.ai)
+    except AIConfigError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return None
+
+
+async def _ai_triage_results(
+    config: StarTriageConfig,
+    results: Sequence[tuple[str, TriageResult]],
+    provider,
+) -> None:
+    """Run the AI agent over the Launchpad tasks gathered by a normal triage run."""
+    from .ai import payloads_from_tasks, run_agent_on_payloads
+    from .sources.launchpad.triage import LaunchpadTriage
+
+    tasks: list = []
+    for _, result in results:
+        if isinstance(result, LaunchpadTriage):
+            tasks = list(result.tasks.tasks)
+            break
+
+    payloads = await asyncio.to_thread(payloads_from_tasks, tasks)
+    path = await run_agent_on_payloads(config, payloads, provider=provider)
+    if path is not None:
+        print(f"AI triage report written to {path}")
+
+
+async def _run_ai_triage(args: argparse.Namespace, config: StarTriageConfig) -> None:
+    from .ai import gather_user_bug_payloads, run_agent_on_payloads
+
+    provider = _build_ai_provider(config)
+    if provider is None:
+        return
+
+    payloads = await asyncio.to_thread(gather_user_bug_payloads, args.bug)
+    if not payloads:
+        print("No valid bugs to triage.", file=sys.stderr)
+        return
+
+    path = await run_agent_on_payloads(config, payloads, provider=provider)
+    if path is not None:
+        print(f"AI triage report written to {path}")
 
 
 async def _set_config_settings(args: argparse.Namespace, _config: StarTriageConfig) -> None:

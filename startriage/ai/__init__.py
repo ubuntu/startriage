@@ -19,6 +19,12 @@ from .provider import (
     build_session_kwargs,
 )
 from .render import render_report, report_filename, write_report
+from .run import (
+    gather_user_bug_payloads,
+    parse_bug_number,
+    payloads_from_tasks,
+    run_agent_on_payloads,
+)
 
 __all__ = [
     "AgentResult",
@@ -32,10 +38,14 @@ __all__ = [
     "build_provider",
     "build_session_kwargs",
     "extract_json_block",
+    "gather_user_bug_payloads",
     "load_system_prompt",
     "parse_agent_result",
+    "parse_bug_number",
+    "payloads_from_tasks",
     "render_report",
     "report_filename",
+    "run_agent_on_payloads",
     "triage_bug",
     "triage_bugs",
     "write_report",
