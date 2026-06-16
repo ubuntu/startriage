@@ -19,3 +19,10 @@ class FetchMode(StrEnum):
     triage = "triage"  # date-range bugs for daily triage
     todo = "todo"  # tag-filtered housekeeping bugs
     subscribed = "subscribed"  # list subscribed bugs
+
+
+class AIProvider(StrEnum):
+    """LLM backend used for agentic triage."""
+
+    copilot = "copilot"  # GitHub Copilot SDK (default); GitHub token auth
+    openrouter = "openrouter"  # OpenAI-compatible BYOK endpoint

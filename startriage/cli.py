@@ -10,7 +10,7 @@ from pathlib import Path
 
 from .config import DEFAULT_USER_CONFIG, StarTriageConfig, load_config, resolve_team_name, update_user_config
 from .dates import parse_interval, triage_task_date_range
-from .enums import UpdateFilter
+from .enums import AIProvider, UpdateFilter
 from .log import log_setup
 from .output import OutputConfig, OutputFormat
 from .savebugs import BugPersistor, SaveConfig
@@ -208,6 +208,37 @@ GREEN = done
             "Alternatively set the GITHUB_TOKEN environment variable."
         ),
     )
+    config_setdefaults_p.add_argument(
+        "--ai-provider",
+        choices=AIProvider,
+        help="Set AI triage provider in config (ai.provider)",
+    )
+    config_setdefaults_p.add_argument(
+        "--ai-model",
+        metavar="MODEL",
+        help="Set AI triage model in config (ai.model)",
+    )
+    config_setdefaults_p.add_argument(
+        "--ai-github-token",
+        metavar="TOKEN",
+        help=(
+            "Set Copilot GitHub token in config (ai.github_token). "
+            "Alternatively set the COPILOT_GITHUB_TOKEN environment variable."
+        ),
+    )
+    config_setdefaults_p.add_argument(
+        "--ai-openrouter-key",
+        metavar="KEY",
+        help=(
+            "Set OpenRouter API key in config (ai.openrouter_api_key). "
+            "Alternatively set the OPENROUTER_API_KEY environment variable."
+        ),
+    )
+    config_setdefaults_p.add_argument(
+        "--ai-openrouter-base-url",
+        metavar="URL",
+        help="Set OpenRouter base URL in config (ai.openrouter_base_url)",
+    )
     config_setdefaults_p.set_defaults(func=_set_config_settings)
 
     config_show_p = config_sp.add_parser("show", help="Display resolved configuration")
@@ -358,12 +389,24 @@ async def _set_config_settings(args: argparse.Namespace, _config: StarTriageConf
         updates.setdefault("general", {})["proposed_min_age"] = args.proposed_min_age
     if args.github_token is not None:
         updates.setdefault("general", {})["github_token"] = args.github_token
+    if args.ai_provider:
+        updates.setdefault("ai", {})["provider"] = str(args.ai_provider)
+    if args.ai_model:
+        updates.setdefault("ai", {})["model"] = args.ai_model
+    if args.ai_github_token is not None:
+        updates.setdefault("ai", {})["github_token"] = args.ai_github_token
+    if args.ai_openrouter_key is not None:
+        updates.setdefault("ai", {})["openrouter_api_key"] = args.ai_openrouter_key
+    if args.ai_openrouter_base_url:
+        updates.setdefault("ai", {})["openrouter_base_url"] = args.ai_openrouter_base_url
 
     if not updates:
         print("No settings to update.")
         return
 
-    sensitive = "github_token" in updates.get("general", {})
+    sensitive = "github_token" in updates.get("general", {}) or bool(
+        {"github_token", "openrouter_api_key"} & updates.get("ai", {}).keys()
+    )
     path = update_user_config(updates, config_path=args.config, sensitive=sensitive)
     print(f"Settings saved to {path!r}")
 

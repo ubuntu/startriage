@@ -11,7 +11,7 @@ from pathlib import Path
 import tomli_w
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
-from .enums import UpdateFilter
+from .enums import AIProvider, UpdateFilter
 
 
 def default_config_path() -> Path:
@@ -22,6 +22,61 @@ def default_config_path() -> Path:
 
 
 DEFAULT_USER_CONFIG = default_config_path()
+
+# Environment variables consulted for AI credentials, in priority order.
+# Copilot mirrors the GitHub Copilot SDK's own precedence.
+COPILOT_TOKEN_ENV_VARS = ("COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN")
+OPENROUTER_KEY_ENV_VARS = ("STARTRIAGE_AI_OPENROUTER_KEY", "OPENROUTER_API_KEY")
+
+
+def _first_env(names: tuple[str, ...]) -> str | None:
+    """Return the first non-empty value among the given environment variables."""
+    for name in names:
+        value = os.environ.get(name)
+        if value:
+            return value
+    return None
+
+
+class AIConfigError(Exception):
+    """Raised when the [ai] section lacks the credentials required to run."""
+
+
+class AIConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    provider: AIProvider = AIProvider.copilot
+    model: str = "claude-opus-4.8"
+    # Copilot auth (or rely on COPILOT_GITHUB_TOKEN / GH_TOKEN / GITHUB_TOKEN env).
+    github_token: str | None = None
+    # OpenRouter (BYOK) auth.
+    openrouter_api_key: str | None = None
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+
+    def resolve_token(self) -> str | None:
+        """Return the effective credential for the active provider.
+
+        Config values take precedence over environment variables.
+        """
+        if self.provider is AIProvider.copilot:
+            return self.github_token or _first_env(COPILOT_TOKEN_ENV_VARS)
+        return self.openrouter_api_key or _first_env(OPENROUTER_KEY_ENV_VARS)
+
+    def require_configured(self) -> None:
+        """Raise AIConfigError with a friendly hint when no credential is available."""
+        if self.resolve_token():
+            return
+        if self.provider is AIProvider.copilot:
+            raise AIConfigError(
+                "No Copilot credential configured. Run "
+                "'startriage config set --ai-github-token <token>' or set the "
+                "COPILOT_GITHUB_TOKEN environment variable."
+            )
+        raise AIConfigError(
+            "No OpenRouter API key configured. Run "
+            "'startriage config set --ai-openrouter-key <key>' or set the "
+            "OPENROUTER_API_KEY environment variable."
+        )
 
 
 class GeneralConfig(BaseModel):
@@ -86,6 +141,7 @@ class StarTriageConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     general: GeneralConfig = GeneralConfig()
+    ai: AIConfig = AIConfig()
     team: dict[str, TeamConfig] = {}
     loaded_paths: list[Path] = []
 
@@ -98,9 +154,11 @@ class StarTriageConfig(BaseModel):
             raise KeyError(f"Unknown team '{name}'. Available teams: {available}") from None
 
     def show(self) -> str:
-        data: dict = {"general": {}, "team": {}}
+        data: dict = {"general": {}, "ai": {}, "team": {}}
         for field, value in self.general.model_dump(exclude_none=True).items():
             data["general"][field] = value
+        for field, value in self.ai.model_dump(exclude_none=True).items():
+            data["ai"][field] = value
         for team_name, team in self.team.items():
             data["team"][team_name] = team.model_dump(exclude_none=True)
 
@@ -184,6 +242,9 @@ def load_config(user_config_path: Path | None) -> StarTriageConfig:
     # Merge general section
     merged_general = {**defaults.get("general", {}), **user.get("general", {})}
 
+    # Merge ai section (user overrides defaults field-by-field)
+    merged_ai = {**defaults.get("ai", {}), **user.get("ai", {})}
+
     # Merge team sections field-by-field so a sparse user section doesn't lose defaults
     default_teams = defaults.get("team", {})
     user_teams = user.get("team", {})
@@ -193,7 +254,7 @@ def load_config(user_config_path: Path | None) -> StarTriageConfig:
     }
 
     return StarTriageConfig.model_validate(
-        {"general": merged_general, "team": merged_teams, "loaded_paths": loaded_paths}
+        {"general": merged_general, "ai": merged_ai, "team": merged_teams, "loaded_paths": loaded_paths}
     )
 
 

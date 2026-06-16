@@ -8,7 +8,8 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from startriage.config import load_config
+from startriage.config import AIConfigError, load_config, update_user_config
+from startriage.enums import AIProvider
 
 
 def _write_toml(tmp_path: Path, content: str) -> Path:
@@ -122,3 +123,106 @@ def test_github_token_config(tmp_path):
     )
     config = load_config(p)
     assert config.general.github_token == "ghp_secret"
+
+
+def test_ai_defaults(tmp_path):
+    """No [ai] section yields sensible Copilot defaults."""
+    config = load_config(tmp_path / "nonexistent.toml")
+    assert config.ai.provider is AIProvider.copilot
+    assert config.ai.model == "claude-opus-4.8"
+    assert config.ai.openrouter_base_url == "https://openrouter.ai/api/v1"
+
+
+def test_ai_override(tmp_path):
+    p = _write_toml(
+        tmp_path,
+        """\
+        [ai]
+        provider = "openrouter"
+        model = "anthropic/claude-3.5-sonnet"
+        openrouter_api_key = "or_secret"
+    """,
+    )
+    config = load_config(p)
+    assert config.ai.provider is AIProvider.openrouter
+    assert config.ai.model == "anthropic/claude-3.5-sonnet"
+    assert config.ai.openrouter_api_key == "or_secret"
+
+
+def test_ai_invalid_provider(tmp_path):
+    p = _write_toml(
+        tmp_path,
+        """\
+        [ai]
+        provider = "bogus"
+    """,
+    )
+    with pytest.raises(ValidationError):
+        load_config(p)
+
+
+def test_ai_extra_field_rejected(tmp_path):
+    p = _write_toml(
+        tmp_path,
+        """\
+        [ai]
+        typo_field = true
+    """,
+    )
+    with pytest.raises(ValidationError):
+        load_config(p)
+
+
+def test_ai_resolve_token_prefers_config(tmp_path, monkeypatch):
+    monkeypatch.setenv("COPILOT_GITHUB_TOKEN", "env_token")
+    p = _write_toml(
+        tmp_path,
+        """\
+        [ai]
+        github_token = "cfg_token"
+    """,
+    )
+    config = load_config(p)
+    assert config.ai.resolve_token() == "cfg_token"
+
+
+def test_ai_resolve_token_from_env(tmp_path, monkeypatch):
+    for var in ("COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("GH_TOKEN", "env_token")
+    config = load_config(tmp_path / "nonexistent.toml")
+    assert config.ai.resolve_token() == "env_token"
+
+
+def test_ai_require_configured_copilot_missing(tmp_path, monkeypatch):
+    for var in ("COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"):
+        monkeypatch.delenv(var, raising=False)
+    config = load_config(tmp_path / "nonexistent.toml")
+    with pytest.raises(AIConfigError, match="Copilot"):
+        config.ai.require_configured()
+
+
+def test_ai_require_configured_openrouter_missing(tmp_path, monkeypatch):
+    for var in ("STARTRIAGE_AI_OPENROUTER_KEY", "OPENROUTER_API_KEY"):
+        monkeypatch.delenv(var, raising=False)
+    p = _write_toml(
+        tmp_path,
+        """\
+        [ai]
+        provider = "openrouter"
+    """,
+    )
+    config = load_config(p)
+    with pytest.raises(AIConfigError, match="OpenRouter"):
+        config.ai.require_configured()
+
+
+def test_ai_secret_written_with_restricted_perms(tmp_path):
+    path = tmp_path / "startriage.toml"
+    update_user_config(
+        {"ai": {"openrouter_api_key": "or_secret"}},
+        config_path=path,
+        sensitive=True,
+    )
+    assert load_config(path).ai.openrouter_api_key == "or_secret"
+    assert (path.stat().st_mode & 0o777) == 0o600
