@@ -26,10 +26,12 @@ class Spinner:
         self,
         pending: set[str],
         *,
+        status: str | None = None,
         out: Callable[[str], None] | None = None,
         interval: float = 1 / 10,  # 10 FPS
     ) -> None:
         self._pending = set(pending)
+        self._status = status
         if out:
             self._write = out
         else:
@@ -43,6 +45,14 @@ class Spinner:
     def done(self, name: str) -> None:
         """Mark *name* as no longer pending."""
         self._pending.discard(name)
+
+    def set_status(self, text: str | None) -> None:
+        """Set a free-form status line (overrides the pending-set display).
+
+        The next animation frame (within ``interval``) picks it up; no redraw is
+        forced here so callers can update it cheaply from a hot loop.
+        """
+        self._status = text
 
     def suspend(self) -> None:
         """Pause spinner writes (call before awaiting section output)."""
@@ -63,7 +73,12 @@ class Spinner:
 
             frame = self._FRAMES[i % len(self._FRAMES)]
             sources = sorted(self._pending)
-            msg = f"Fetching: {', '.join(sources)}…" if sources else "Processing…"
+            if self._status is not None:
+                msg = self._status
+            elif sources:
+                msg = f"Fetching: {', '.join(sources)}…"
+            else:
+                msg = "Processing…"
             line = f"{frame} {msg}"
             self._write(f"\r{line}")
 

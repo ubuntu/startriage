@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from importlib.resources import files
 
@@ -86,13 +87,21 @@ async def triage_bugs(
     provider: Provider,
     payloads: list[dict],
     system_prompt: str | None = None,
+    *,
+    on_progress: Callable[[int, int, str], None] | None = None,
 ) -> list[BugOutcome]:
-    """Triage ``payloads`` sequentially, recording per-bug failures and continuing."""
+    """Triage ``payloads`` sequentially, recording per-bug failures and continuing.
+
+    ``on_progress`` (when given) is called as ``(index, total, bug)`` just before
+    each bug is sent to the agent, so a caller can drive a spinner/progress line.
+    """
     prompt = system_prompt if system_prompt is not None else load_system_prompt()
     total = len(payloads)
     outcomes: list[BugOutcome] = []
     for index, payload in enumerate(payloads, start=1):
         bug = str(payload.get("number", ""))
+        if on_progress is not None:
+            on_progress(index, total, bug)
         logger.info("Triaging bug %s (%d/%d)…", bug, index, total)
         outcome = await triage_bug(provider, payload, prompt)
         _log_outcome(outcome)

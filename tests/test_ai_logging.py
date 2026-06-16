@@ -56,3 +56,18 @@ async def test_triage_bugs_debug_logs_thought_process(caplog):
 
     debug = [r.getMessage() for r in caplog.records if r.levelno == logging.DEBUG]
     assert any("thought process: Checked the logs." in m for m in debug)
+
+
+@pytest.mark.asyncio
+async def test_triage_bugs_reports_progress():
+    provider = FakeProvider([_OK, _OK])
+    seen: list[tuple[int, int, str]] = []
+
+    await triage_bugs(
+        provider,
+        [{"number": "100"}, {"number": "200"}],
+        system_prompt="sys",
+        on_progress=lambda index, total, bug: seen.append((index, total, bug)),
+    )
+
+    assert seen == [(1, 2, "100"), (2, 2, "200")]

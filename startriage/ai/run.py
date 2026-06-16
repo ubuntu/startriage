@@ -15,12 +15,15 @@ pull in launchpadlib.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import re
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ..config import StarTriageConfig
+from ..spinner import Spinner
 from .agent import load_system_prompt, triage_bugs
 from .provider import Provider, build_provider
 from .render import render_report, write_report
@@ -89,6 +92,21 @@ def payloads_from_tasks(tasks: list[Task]) -> list[dict[str, Any]]:
     return payloads
 
 
+def _make_spinner(total: int) -> Spinner | None:
+    """Return a status spinner, or ``None`` when one would be unhelpful/noisy.
+
+    Suppressed when stderr is not a TTY (piped/CI) or when INFO logging is on
+    (``-v``/``-vv``), since the agent loop already logs per-bug progress there
+    and a redrawing spinner would corrupt the log stream.
+    """
+    if not sys.stderr.isatty():
+        return None
+    if logging.getLogger("startriage").isEnabledFor(logging.INFO):
+        return None
+    noun = "bug" if total == 1 else "bugs"
+    return Spinner(set(), status=f"Preparing to triage {total} {noun}…")
+
+
 async def run_agent_on_payloads(
     config: StarTriageConfig,
     payloads: list[dict[str, Any]],
@@ -110,7 +128,16 @@ async def run_agent_on_payloads(
         provider = build_provider(config.ai)
 
     system_prompt = load_system_prompt()
-    outcomes = await triage_bugs(provider, payloads, system_prompt)
+    spinner = _make_spinner(len(payloads))
+
+    def on_progress(index: int, total: int, bug: str) -> None:
+        if spinner is not None:
+            label = f"LP #{bug}" if bug else "bug"
+            spinner.set_status(f"Triaging {label} ({index}/{total})…")
+
+    async with spinner if spinner is not None else contextlib.nullcontext():
+        outcomes = await triage_bugs(provider, payloads, system_prompt, on_progress=on_progress)
+
     report = render_report(outcomes)
     path = write_report(report, preferred_dir=preferred_dir)
     logger.info("AI triage report written to %s", path)

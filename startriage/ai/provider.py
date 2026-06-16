@@ -109,7 +109,10 @@ class CopilotProvider(Provider):
                 # so unattended runs are auditable; cheap no-op otherwise.
                 if logger.isEnabledFor(logging.DEBUG):
                     session.on(_log_session_event)
-                message = await session.send_and_wait(user_message)
+                # timeout=None waits until the agent is idle rather than aborting
+                # after the SDK's 60s default; triage turns routinely run longer
+                # (source pulls, debdiffs). The user can cancel with Ctrl-C.
+                message = await session.send_and_wait(user_message, timeout=None)
                 return (message.data.content or "") if message else ""
 
 
