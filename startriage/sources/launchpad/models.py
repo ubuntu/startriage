@@ -36,6 +36,37 @@ def mark(text: str, color: str) -> str:
     return "".join([color, text, COLOR_RESET])
 
 
+def _name_from_link(link: str | None) -> str | None:
+    """Extract a username from a Launchpad person link (``.../~username``)."""
+    if not link or "~" not in link:
+        return None
+    return link.split("~")[-1]
+
+
+def _affected_from_task(lp_task: Any) -> dict[str, Any]:
+    """Best-effort structured description of one bug task (affected target).
+
+    Always includes the human-readable ``target`` (e.g. ``"pkg (Ubuntu Jammy)"``)
+    plus the task ``status``/``importance``. For distribution source-package
+    tasks it additionally resolves ``distro``, ``package`` and ``series``.
+    Launchpad bug tasks do not expose a package version, so none is reported.
+    """
+    entry: dict[str, Any] = {
+        "target": lp_task.bug_target_name,
+        "status": lp_task.status,
+        "importance": lp_task.importance,
+    }
+    parts = str(lp_task).split("/")
+    if "+source" in parts and len(parts) >= 5:
+        si = parts.index("+source")
+        distro = parts[4]
+        before = parts[si - 1]
+        entry["distro"] = distro
+        entry["package"] = parts[si + 1] if si + 1 < len(parts) else None
+        entry["series"] = before if before != distro else None
+    return entry
+
+
 @dataclass
 class RenderContext:
     """Render-time state passed explicitly to Task display methods.
@@ -357,6 +388,54 @@ class Task:
             "is_verification_needed": self._is_verification_needed(),
             "is_verification_done": self._is_verification_done(),
             "sibling_task_status": sibling_status,
+        }
+
+    def to_agent_payload(self) -> dict[str, Any]:
+        """Build the rich, JSON-serialisable bug context handed to the AI agent.
+
+        Unlike :meth:`to_dict` (terminal/markdown rendering metadata), this pulls
+        the full report body the agent needs to triage: description, every
+        comment, attachments, all affected targets, duplicate-of, and heat.
+
+        Accessing these fields triggers lazy launchpadlib fetches, so call this
+        off the event loop (e.g. via ``asyncio.to_thread``), mirroring the
+        finder's threaded LP access.
+        """
+        bug = self.lp_task.bug
+
+        comments: list[dict[str, Any]] = []
+        # messages[0] is the original report (already captured by ``description``);
+        # the remainder are follow-up comments.
+        for msg in list(bug.messages)[1:]:
+            comments.append(
+                {
+                    "author": _name_from_link(msg.owner_link),
+                    "date": msg.date_created.isoformat() if msg.date_created else None,
+                    "text": msg.content,
+                }
+            )
+
+        attachments = [
+            {"title": att.title, "type": att.type, "is_patch": att.type == "Patch"} for att in bug.attachments
+        ]
+
+        duplicate_of = bug.duplicate_of
+        duplicate_of_number = str(duplicate_of.id) if duplicate_of else None
+
+        return {
+            "number": self.number,
+            "url": self.url,
+            "title": self.title,
+            "short_title": self.short_title,
+            "description": bug.description,
+            "status": self.status,
+            "importance": self.importance,
+            "tags": list(self.tags),
+            "heat": bug.heat,
+            "duplicate_of": duplicate_of_number,
+            "affected": [_affected_from_task(t) for t in self._all_bug_tasks],
+            "attachments": attachments,
+            "comments": comments,
         }
 
 
