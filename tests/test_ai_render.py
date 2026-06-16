@@ -9,11 +9,12 @@ from startriage.ai import (
     AgentResult,
     BugOutcome,
     ProposedFix,
+    append_report,
     render_report,
     report_filename,
     write_report,
 )
-from startriage.ai.render import _render_proposed_fix
+from startriage.ai.render import AI_APPEND_NOTICE, _render_proposed_fix
 from startriage.enums import ProposedFixKind, TriageStatus
 
 _DAY = date(2026, 6, 15)
@@ -192,3 +193,19 @@ def test_write_report_defaults_to_cwd(tmp_path, monkeypatch):
     path = write_report("x", day=_DAY)
     assert path == Path.cwd() / "autotriage-2026-06-15.md"
     assert path.read_text() == "x"
+
+
+def test_append_report_adds_notice_after_existing_content(tmp_path):
+    md = tmp_path / "triage.md"
+    md.write_text("# Triage\n\nSome human content.\n")
+
+    returned = append_report(md, "# Automated triage — 2026-06-15\n\n## LP #1\n")
+
+    assert returned == md
+    text = md.read_text()
+    # Original content is preserved and comes first.
+    assert text.startswith("# Triage\n\nSome human content.\n")
+    # A notice separates the AI section from the human report.
+    assert AI_APPEND_NOTICE in text
+    assert text.index("Some human content.") < text.index("Automated triage")
+    assert text.endswith("## LP #1\n")

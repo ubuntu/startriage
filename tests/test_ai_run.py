@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import date
-
 import pytest
 
 from startriage.ai import (
@@ -87,41 +85,39 @@ def test_payloads_from_tasks_skips_failures():
 
 
 @pytest.mark.asyncio
-async def test_run_agent_on_payloads_writes_report(tmp_path):
+async def test_run_agent_on_payloads_returns_markdown():
     provider = FakeProvider([_CANNED])
     config = StarTriageConfig()
     payloads = [{"number": "123", "title": "boom"}]
 
-    path = await run_agent_on_payloads(config, payloads, provider=provider, preferred_dir=tmp_path)
+    report = await run_agent_on_payloads(config, payloads, provider=provider)
 
-    assert path == tmp_path / f"autotriage-{date.today().isoformat()}.md"
-    content = path.read_text()
-    assert "## LP #123 — pkg — boom on start" in content
-    assert "**Suggested status:** Triaged" in content
+    assert report is not None
+    assert "## LP #123 — pkg — boom on start" in report
+    assert "**Suggested status:** Triaged" in report
     # The agent was asked exactly once, with the payload as the user message.
     assert len(provider.calls) == 1
     assert '"number": "123"' in provider.calls[0][1]
 
 
 @pytest.mark.asyncio
-async def test_run_agent_on_payloads_empty_returns_none(tmp_path):
+async def test_run_agent_on_payloads_empty_returns_none():
     provider = FakeProvider([])
-    path = await run_agent_on_payloads(StarTriageConfig(), [], provider=provider, preferred_dir=tmp_path)
-    assert path is None
+    report = await run_agent_on_payloads(StarTriageConfig(), [], provider=provider)
+    assert report is None
     assert provider.calls == []
 
 
 @pytest.mark.asyncio
-async def test_run_agent_on_payloads_records_bad_agent_output(tmp_path):
+async def test_run_agent_on_payloads_records_bad_agent_output():
     provider = FakeProvider(["no json here"])
-    path = await run_agent_on_payloads(
+    report = await run_agent_on_payloads(
         StarTriageConfig(),
         [{"number": "999"}],
         provider=provider,
-        preferred_dir=tmp_path,
     )
-    assert path is not None
-    assert "## LP #999 — triage failed" in path.read_text()
+    assert report is not None
+    assert "## LP #999 — triage failed" in report
 
 
 # --- CLI parser wiring -----------------------------------------------------

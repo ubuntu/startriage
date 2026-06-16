@@ -19,14 +19,13 @@ import contextlib
 import logging
 import re
 import sys
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ..config import StarTriageConfig
 from ..spinner import Spinner
 from .agent import load_system_prompt, triage_bugs
 from .provider import Provider, build_provider
-from .render import render_report, write_report
+from .render import render_report
 
 if TYPE_CHECKING:
     from ..sources.launchpad.models import Task
@@ -112,13 +111,14 @@ async def run_agent_on_payloads(
     payloads: list[dict[str, Any]],
     *,
     provider: Provider | None = None,
-    preferred_dir: Path | None = None,
-) -> Path | None:
-    """Run the agent over ``payloads`` and write the dated report.
+) -> str | None:
+    """Run the agent over ``payloads`` and return the rendered markdown report.
 
-    Returns the report path, or ``None`` when there is nothing to triage. When
-    ``provider`` is omitted it is built from ``config`` (validating credentials,
-    which may raise :class:`~startriage.config.AIConfigError`).
+    Returns the markdown string, or ``None`` when there is nothing to triage.
+    Emitting the report (printing, writing a dated file, or appending to a
+    triage markdown file) is left to the caller. When ``provider`` is omitted it
+    is built from ``config`` (validating credentials, which may raise
+    :class:`~startriage.config.AIConfigError`).
     """
     if not payloads:
         logger.info("No bugs to triage with the AI agent.")
@@ -138,7 +138,4 @@ async def run_agent_on_payloads(
     async with spinner if spinner is not None else contextlib.nullcontext():
         outcomes = await triage_bugs(provider, payloads, system_prompt, on_progress=on_progress)
 
-    report = render_report(outcomes)
-    path = write_report(report, preferred_dir=preferred_dir)
-    logger.info("AI triage report written to %s", path)
-    return path
+    return render_report(outcomes)

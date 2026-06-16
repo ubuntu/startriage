@@ -17,6 +17,15 @@ from ..enums import ProposedFixKind
 from .agent import BugOutcome
 from .contract import AgentResult, ProposedFix
 
+#: Heading + notice prepended when an AI report is appended to a triage markdown
+#: file, to keep the AI-generated content clearly separated from the human report.
+AI_APPEND_NOTICE = (
+    "---\n\n"
+    "> **AI-generated triage aid.** The section below was produced by an automated "
+    "agent. Review it critically — do **not** paste it into the official triage "
+    "report verbatim.\n\n"
+)
+
 
 def report_filename(day: date | None = None) -> str:
     """Return the report file name for ``day`` (defaults to today)."""
@@ -138,3 +147,15 @@ def write_report(
         fallback = fallback_dir / name
         fallback.write_text(content, encoding="utf-8")
         return fallback
+
+
+def append_report(path: Path, content: str) -> Path:
+    """Append an AI ``content`` report to an existing markdown file at ``path``.
+
+    A horizontal rule and a notice (:data:`AI_APPEND_NOTICE`) are inserted first so
+    the AI-generated section is clearly separated from the human-written triage
+    report and is not mistaken for part of it.
+    """
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write("\n\n" + AI_APPEND_NOTICE + content)
+    return path

@@ -18,7 +18,7 @@ from .provider import (
     build_provider,
     build_session_kwargs,
 )
-from .render import render_report, report_filename, write_report
+from .render import append_report, render_report, report_filename, write_report
 from .run import (
     gather_user_bug_payloads,
     parse_bug_number,
@@ -34,6 +34,7 @@ __all__ = [
     "FakeProvider",
     "ProposedFix",
     "Provider",
+    "append_report",
     "build_client_kwargs",
     "build_provider",
     "build_session_kwargs",

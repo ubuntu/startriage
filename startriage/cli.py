@@ -178,7 +178,10 @@ GREEN = done
     triage_p.add_argument(
         "--ai",
         action="store_true",
-        help="Also run AI triage on every bug found, writing autotriage-YYYY-MM-DD.md",
+        help=(
+            "Also run AI triage on every bug found. With --markdown the AI report is "
+            "appended to that file; otherwise it is written to autotriage-YYYY-MM-DD.md"
+        ),
     )
     triage_p.set_defaults(func=_run_triage)
 
@@ -379,7 +382,7 @@ async def _run_triage(args: argparse.Namespace, config: StarTriageConfig) -> Non
     results = await run_triage(config, filter, output_cfg)
 
     if args.ai:
-        await _ai_triage_results(config, results, provider)
+        await _ai_triage_results(config, results, provider, output_cfg.markdown_path)
 
 
 async def _run_todo(args: argparse.Namespace, config: StarTriageConfig) -> None:
@@ -420,6 +423,7 @@ async def _ai_triage_results(
     config: StarTriageConfig,
     results: Sequence[tuple[str, TriageResult]],
     provider,
+    markdown_path: Path | None,
 ) -> None:
     """Run the AI agent over the Launchpad tasks gathered by a normal triage run."""
     from .ai import payloads_from_tasks, run_agent_on_payloads
@@ -432,8 +436,26 @@ async def _ai_triage_results(
             break
 
     payloads = await asyncio.to_thread(payloads_from_tasks, tasks)
-    path = await run_agent_on_payloads(config, payloads, provider=provider)
-    if path is not None:
+    report = await run_agent_on_payloads(config, payloads, provider=provider)
+    if report is None:
+        return
+    _emit_ai_report(report, markdown_path)
+
+
+def _emit_ai_report(report: str, markdown_path: Path | None) -> None:
+    """Persist an AI ``report`` for a ``triage --ai`` run.
+
+    With ``--markdown`` the report is appended (behind a notice) to that file,
+    mirroring how the normal triage markdown is produced. Otherwise it is written
+    to a dated ``autotriage-<date>.md`` file and the path is shown on stdout.
+    """
+    from .ai import append_report, write_report
+
+    if markdown_path is not None:
+        append_report(markdown_path, report)
+        print(f"AI triage appended to {markdown_path}")
+    else:
+        path = write_report(report)
         print(f"AI triage report written to {path}")
 
 
@@ -449,9 +471,9 @@ async def _run_ai_triage(args: argparse.Namespace, config: StarTriageConfig) -> 
         print("No valid bugs to triage.", file=sys.stderr)
         return
 
-    path = await run_agent_on_payloads(config, payloads, provider=provider)
-    if path is not None:
-        print(f"AI triage report written to {path}")
+    report = await run_agent_on_payloads(config, payloads, provider=provider)
+    if report is not None:
+        print(report)
 
 
 async def _set_config_settings(args: argparse.Namespace, _config: StarTriageConfig) -> None:
