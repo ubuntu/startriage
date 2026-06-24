@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 
 import aiohttp
 
@@ -18,6 +19,10 @@ _LP_SOURCE_URL = "https://launchpad.net/ubuntu/+source/{pkg}"
 _LP_SOURCE_VERSION_URL = "https://launchpad.net/ubuntu/+source/{pkg}/{version}"
 _LP_BUG_URL = "https://bugs.launchpad.net/bugs/{bug}"
 _EXCUSES_URL = "https://ubuntu-archive-team.ubuntu.com/proposed-migration/update_excuses.html#{pkg}"
+
+# proposed-migration is a snapshot of the *current* archive, so it is only
+# relevant when the triage interval includes recent days.
+_RECENT_THRESHOLD_DAYS = 7
 
 # ANSI colours (applied unconditionally, same pattern as launchpad/models.py)
 _COLOR_GREEN = "\033[0;32m"
@@ -105,12 +110,24 @@ def _print_terminal_table(excuses: list[MigrationExcuse], cfg: OutputConfig) -> 
 class ProposedMigrationTriage(TriageResult):
     data: ProposedMigrationData
     teams: list[str]
+    skipped_reason: str | None = None
 
     @property
     def had_updates(self) -> bool:
         return bool(self.data.excuses)
 
     async def print_section(self, cfg: OutputConfig) -> None:
+        if self.skipped_reason is not None:
+            match cfg.fmt:
+                case OutputFormat.TERMINAL:
+                    print("## Proposed Migration", file=cfg.out)
+                    print(f"  (skipped: {self.skipped_reason})", file=cfg.out)
+                case OutputFormat.MARKDOWN:
+                    pass
+                case _:
+                    raise NotImplementedError
+            return
+
         excuses = self.data.excuses
         count = len(excuses)
         plural = "package" if count == 1 else "packages"
@@ -173,6 +190,22 @@ async def find(
         return ProposedMigrationTriage(
             data=ProposedMigrationData(generated_date=None, excuses=[]),
             teams=[],
+        )
+
+    # proposed-migration reflects the *current* archive state, so it is only
+    # meaningful when the triage interval includes recent days. Skip it when the
+    # interval ends more than a week ago.
+    cutoff = datetime.now(timezone.utc) - timedelta(days=_RECENT_THRESHOLD_DAYS)
+    if opts.end < cutoff:
+        reason = (
+            f"triage interval ends {opts.end.date().isoformat()}, "
+            f"more than {_RECENT_THRESHOLD_DAYS} days ago "
+            "(proposed-migration only reflects the current archive state)"
+        )
+        return ProposedMigrationTriage(
+            data=ProposedMigrationData(generated_date=None, excuses=[]),
+            teams=teams,
+            skipped_reason=reason,
         )
 
     async with aiohttp.ClientSession() as session:
