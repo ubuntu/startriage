@@ -9,7 +9,11 @@ from datetime import datetime, timedelta
 import aiohttp
 import debian.deb822
 import platformdirs
-from launchpadlib.credentials import AuthorizeRequestTokenWithURL, UnencryptedFileCredentialStore
+from launchpadlib.credentials import (
+    AuthorizeRequestTokenWithURL,
+    Credentials,
+    UnencryptedFileCredentialStore,
+)
 from launchpadlib.launchpad import Launchpad
 from lazr.restfulclient.errors import ClientError
 
@@ -50,21 +54,51 @@ PACKAGING_TASK_TAGS = [
 ]
 
 
+LP_CONSUMER_NAME = "startriage"
+
+
+def _discard_foreign_credentials(cred_location) -> None:
+    """Drop a cached credential that belongs to a different OAuth consumer.
+
+    fixed in launchpadlib via https://code.launchpad.net/~jj/launchpadlib/+git/launchpadlib/+merge/505695
+
+    launchpadlib's UnencryptedFileCredentialStore loads whatever consumer is in
+    the file, ignoring the consumer we actually ask for. Older startriage
+    versions logged in with a system-wide desktop consumer (keyed by hostname),
+    so a leftover file makes the first API call return 401 and triggers a broken
+    mid-session re-auth against the wrong consumer ("Not allowed here" on the
+    Launchpad authorization page). Discard such files so we re-authenticate
+    cleanly as LP_CONSUMER_NAME.
+    """
+    if not cred_location.exists():
+        return
+    creds = Credentials.load_from_path(str(cred_location))
+    consumer_key = getattr(creds.consumer, "key", None)
+    if consumer_key != LP_CONSUMER_NAME:
+        logger.info(
+            "discarding launchpad credentials for foreign consumer %r (expected %r)",
+            consumer_key,
+            LP_CONSUMER_NAME,
+        )
+        cred_location.unlink(missing_ok=True)
+
+
 def connect_launchpad() -> Launchpad:
     cred_dir = platformdirs.user_data_path("startriage")
     cred_dir.mkdir(parents=True, exist_ok=True)
     cred_location = cred_dir / "lp_creds"
+    _discard_foreign_credentials(cred_location)
     credential_store = UnencryptedFileCredentialStore(str(cred_location))
 
     logger.debug("logging into launchpad...")
     return Launchpad.login_with(
-        consumer_name="startriage",
+        consumer_name=LP_CONSUMER_NAME,
         service_root="production",
         version="devel",
         credential_store=credential_store,
         # workaround until https://code.launchpad.net/~jj/launchpadlib/+git/launchpadlib/+merge/505695
         # is released
-        authorization_engine=AuthorizeRequestTokenWithURL("production", consumer_name="startriage"),
+        authorization_engine=AuthorizeRequestTokenWithURL("production", consumer_name=LP_CONSUMER_NAME),
     )
 
 
