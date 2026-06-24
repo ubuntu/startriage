@@ -56,6 +56,10 @@ PACKAGING_TASK_TAGS = [
 
 LP_CONSUMER_NAME = "startriage"
 
+# startriage only ever reads from Launchpad, so we offer the end-user just the
+# read-only access levels in the authorization web UI.
+LP_ACCESS_LEVELS = ["READ_PUBLIC", "READ_PRIVATE"]
+
 
 def _discard_foreign_credentials(cred_location) -> None:
     """Drop a cached credential that belongs to a different OAuth consumer.
@@ -98,7 +102,11 @@ def connect_launchpad() -> Launchpad:
         credential_store=credential_store,
         # workaround until https://code.launchpad.net/~jj/launchpadlib/+git/launchpadlib/+merge/505695
         # is released
-        authorization_engine=AuthorizeRequestTokenWithURL("production", consumer_name=LP_CONSUMER_NAME),
+        authorization_engine=AuthorizeRequestTokenWithURL(
+            "production",
+            consumer_name=LP_CONSUMER_NAME,
+            allow_access_levels=LP_ACCESS_LEVELS,
+        ),
     )
 
 
