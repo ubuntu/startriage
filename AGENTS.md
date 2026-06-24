@@ -10,7 +10,14 @@ It is designed to be used by all Ubuntu development teams, adjustable to their n
 - **Package Manager**: `uv`
 - **Dependencies**: managed in `pyproject.toml`
 
-## Running Tests
+### Running the Tool
+For development, run through `uv run`:
+
+```bash
+uv run startriage ...
+```
+
+### Running Tests
 - Libraries: `pytest`, `pytest-cov`, `pytest-asyncio`
 
 ```bash
