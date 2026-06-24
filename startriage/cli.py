@@ -37,7 +37,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "--config",
         metavar="PATH",
         type=Path,
-        help=f"Path to config TOML (default: {DEFAULT_USER_CONFIG})",
+        help=(
+            f"Path to config TOML (default: {DEFAULT_USER_CONFIG}; "
+            "when using the snap: ~/snap/startriage/current/.config/startriage.toml)"
+        ),
     )
     parser.add_argument(
         "-v", "--verbose", action="count", default=0, help="Increase logging verbosity (repeatable)"
@@ -49,7 +52,10 @@ def _build_parser() -> argparse.ArgumentParser:
     output_p.add_argument(
         "--markdown",
         metavar="PATH",
-        help="Write parallel markdown output to PATH (for Discourse post template)",
+        help=(
+            "Write parallel markdown output to PATH (for Discourse post template). "
+            "As a snap, /tmp is private; use a path under your home directory (e.g. ~/triage.md)."
+        ),
     )
     output_p.add_argument(
         "--format",

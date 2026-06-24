@@ -1,6 +1,11 @@
 # startriage
 
-Unified triage tool for Ubuntu bugs (Launchpad), documentation (GitHub), and forum posts (Discourse).
+Unified triage tool for Ubuntu
+
+- Launchpad
+- GitHub
+- Discourse
+- Proposed migration
 
 ## Installation
 
@@ -16,7 +21,8 @@ uv run startriage
 # Daily triage (yesterday's activity, or Friday–Sunday if today is Monday)
 startriage triage
 # Generate a markdown report as template for discourse alongside
-startriage triage --markdown /tmp/summary.md
+# (remember /tmp/ is private when running as snap)
+startriage triage --markdown ~/triage-summary.md
 
 # Specify a team explicitly
 startriage -t ubuntu-server triage
