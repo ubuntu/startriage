@@ -16,7 +16,8 @@ from startriage.config import DEFAULT_USER_CONFIG, StarTriageConfig, update_user
 
 logger = logging.getLogger(__name__)
 
-_GITHUB_TOKEN_ENV = "GITHUB_TOKEN"
+# Checked in order of precedence, matching the GitHub CLI (`gh`).
+_GITHUB_TOKEN_ENV_VARS = ("GH_TOKEN", "GITHUB_TOKEN")
 _GITHUB_DEVICE_CODE_URL = "https://github.com/login/device/code"
 _GITHUB_ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token"
 # OAuth App client ID for startriage device flow
@@ -35,7 +36,7 @@ class GitHubRateLimitError(RuntimeError):
             "`startriage config set --github-token <token>`\n"
             "     - get a personal access token from https://github.com/settings/tokens\n"
             "     - the special token value 'gh' fetches a token from the gh CLI dynamically)\n"
-            "  3. Set the GITHUB_TOKEN environment variable\n"
+            "  3. Set the GH_TOKEN or GITHUB_TOKEN environment variable\n"
         )
 
 
@@ -53,12 +54,13 @@ def get_github_token(config_token: str | None = None) -> str | None:
     """Return a GitHub token from env, config, or gh CLI, or None.
 
     Priority:
-    1. GITHUB_TOKEN environment variable
+    1. GH_TOKEN / GITHUB_TOKEN environment variable (gh CLI precedence)
     2. Config token (if "gh", fetch via gh CLI; otherwise use as-is)
     """
-    token = os.environ.get(_GITHUB_TOKEN_ENV)
-    if token:
-        return token
+    for env_var in _GITHUB_TOKEN_ENV_VARS:
+        token = os.environ.get(env_var)
+        if token:
+            return token
 
     if config_token is not None:
         if config_token == "gh":

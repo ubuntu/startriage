@@ -16,27 +16,36 @@ from startriage.sources.github.finder import _graphql
 
 
 class TestGetGitHubToken:
+    @pytest.fixture(autouse=True)
+    def _clear_token_env(self, monkeypatch):
+        # Keep tests deterministic regardless of the runner's environment.
+        monkeypatch.delenv("GH_TOKEN", raising=False)
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+
     def test_env_var_takes_priority(self, monkeypatch):
         monkeypatch.setenv("GITHUB_TOKEN", "env_token")
         assert get_github_token() == "env_token"
         assert get_github_token(config_token="config_token") == "env_token"
 
-    def test_config_token_used_when_no_env(self, monkeypatch):
-        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    def test_gh_token_env_var(self, monkeypatch):
+        monkeypatch.setenv("GH_TOKEN", "gh_env_token")
+        assert get_github_token() == "gh_env_token"
+        # GH_TOKEN takes precedence over GITHUB_TOKEN, matching the gh CLI.
+        monkeypatch.setenv("GITHUB_TOKEN", "github_env_token")
+        assert get_github_token() == "gh_env_token"
+
+    def test_config_token_used_when_no_env(self):
         assert get_github_token(config_token="config_token") == "config_token"
 
-    def test_config_token_gh_invokes_gh_cli(self, monkeypatch):
-        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    def test_config_token_gh_invokes_gh_cli(self):
         with patch("startriage.sources.github.auth._gh_auth_token", return_value="gh_token"):
             assert get_github_token(config_token="gh") == "gh_token"
 
-    def test_none_when_no_sources_available(self, monkeypatch):
-        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    def test_none_when_no_sources_available(self):
         with patch("startriage.sources.github.auth._gh_auth_token", return_value=None):
             assert get_github_token() is None
 
-    def test_gh_auth_token_with_gh_installed(self, monkeypatch):
-        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    def test_gh_auth_token_with_gh_installed(self):
         with patch("startriage.sources.github.auth.shutil.which", return_value="/usr/bin/gh"):
             with patch(
                 "startriage.sources.github.auth.subprocess.run",
@@ -51,8 +60,7 @@ class TestGetGitHubToken:
                     check=False,
                 )
 
-    def test_gh_auth_token_without_gh_installed(self, monkeypatch):
-        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    def test_gh_auth_token_without_gh_installed(self):
         with patch("startriage.sources.github.auth.shutil.which", return_value=None):
             assert get_github_token(config_token="gh") is None
 
@@ -130,8 +138,9 @@ class TestDeviceFlow:
 
         with patch("aiohttp.ClientSession", return_value=session):
             with patch("startriage.sources.github.auth.webbrowser.open"):
-                token = await github_device_flow_login()
-                assert token == "gho_testtoken"
+                with patch("asyncio.sleep", new=AsyncMock()):
+                    token = await github_device_flow_login()
+                    assert token == "gho_testtoken"
 
     async def test_device_flow_polling(self, monkeypatch):
         monkeypatch.setenv("GITHUB_OAUTH_CLIENT_ID", "test_client_id")
@@ -181,11 +190,12 @@ class TestDeviceFlow:
             "user_code": "ABCD-1234",
             "verification_uri": "https://github.com/login/device",
             "interval": 1,
-            "expires_in": 2,
+            "expires_in": 900,
         }
         pending_resp = {"error": "authorization_pending"}
+        expired_resp = {"error": "expired_token"}
 
-        post_responses = [device_code_resp, pending_resp]
+        post_responses = [device_code_resp, pending_resp, expired_resp]
         call_count = 0
 
         def _make_response(data):
