@@ -149,7 +149,7 @@ async def _print_bugs(
         return
 
     if cfg.fmt == OutputFormat.TERMINAL:
-        print(Task.get_table_header(extended=extended), file=cfg.out)
+        print(Task.get_table_header(bugid_len, extended=extended), file=cfg.out)
 
     # Group tasks by bug number, preserving the global sort order of first occurrence.
     # Within each group, sort by actionability so the most-actionable task is primary;

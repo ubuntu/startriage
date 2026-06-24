@@ -228,8 +228,14 @@ class Task:
         )
 
     @staticmethod
-    def get_table_header(extended: bool = False) -> str:
-        text = "%-12s | %-6s | %-*s | %-13s | %-19s |" % (
+    def bug_col_width(bugid_len: int, shortlinks: bool = True) -> int:
+        """Visible width of the bug-reference column for a given max bug-id length."""
+        return bugid_len + len(LPBUGREF if shortlinks else _LP_BUG_URL_ROOT)
+
+    @staticmethod
+    def get_table_header(bugid_len: int, shortlinks: bool = True, extended: bool = False) -> str:
+        text = "%-*s | %-6s | %-*s | %-13s | %-19s |" % (
+            Task.bug_col_width(bugid_len, shortlinks),
             "Bug",
             "Flags",
             _RELEASE_COL_WIDTH,
@@ -251,7 +257,7 @@ class Task:
         newbug: bool = False,
     ) -> str:
         bug_ref = self.bug_reference if shortlinks else self.url
-        fmt_len = bugid_len + len(LPBUGREF if shortlinks else _LP_BUG_URL_ROOT)
+        fmt_len = self.bug_col_width(bugid_len, shortlinks)
         bug_str = hyperlink(self.url, f"%-{fmt_len}s" % bug_ref)
 
         # split up distro tasks to multiple lines if necessary.
@@ -264,7 +270,7 @@ class Task:
         def _release_col(chunk: list[str]) -> str:
             return "".join(chunk) + " " * (_RELEASE_COL_WIDTH - len(chunk))
 
-        text = "%-12s | %6s | %s | %-13s | %s |" % (
+        text = "%s | %6s | %s | %-13s | %s |" % (
             bug_str,
             self.get_flags(ctx, newbug),
             _release_col(chunks[0]),
