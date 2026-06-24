@@ -67,6 +67,7 @@ def get_github_token(config_token: str | None = None) -> str | None:
 
     return None
 
+
 def _gh_auth_token() -> str | None:
     """Fetch token from gh CLI if available, otherwise None."""
     if shutil.which("gh") is None:

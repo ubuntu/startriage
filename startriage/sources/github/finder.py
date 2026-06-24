@@ -154,9 +154,7 @@ def _build_query(states: list[_RepoFetchState], page_size: int = 100) -> str:
             )
 
         fragments.append(
-            f'  repo{i}: repository(owner: "{st.owner}", name: "{st.name}") {{\n'
-            + "\n".join(parts)
-            + "\n  }"
+            f'  repo{i}: repository(owner: "{st.owner}", name: "{st.name}") {{\n' + "\n".join(parts) + "\n  }"
         )
 
     return "query Batch {\n" + "\n".join(fragments) + "\n}"
@@ -222,12 +220,15 @@ async def fetch_repos(
     for repo_name, labels in repos:
         owner, name = repo_name.split("/", 1)
         gh_repo = Repo(owner=owner, name=name, url=f"https://github.com/{repo_name}")
-        if mode == FetchMode.subscribed:
-            issue_states = ["OPEN"]
-            pr_states = ["OPEN"]
-        else:
+        if mode == FetchMode.triage:
+            # Triage shows recent activity, including items closed/merged in the range.
             issue_states = ["OPEN", "CLOSED"]
             pr_states = ["OPEN", "CLOSED", "MERGED"]
+        else:
+            # todo/subscribed: a closed/merged item is done, so only
+            # list open items even if they still carry a todo label.
+            issue_states = ["OPEN"]
+            pr_states = ["OPEN"]
         all_states.append(
             _RepoFetchState(
                 repo=repo_name,
@@ -257,8 +258,11 @@ async def fetch_repos(
             if not active:
                 break
 
-            logger.debug("building query for batch offset %d, active repos: %s",
-                          batch_offset, [st.repo for st in active])
+            logger.debug(
+                "building query for batch offset %d, active repos: %s",
+                batch_offset,
+                [st.repo for st in active],
+            )
             query = _build_query(active)
 
             logger.debug("querying github...")
@@ -271,8 +275,12 @@ async def fetch_repos(
                 if st.fetch_issues:
                     issues_conn = repo_data.get("issues") or {}
                     items, needs_more, cursor = _process_connection(
-                        issues_conn, Issue.from_graphql_node, st.gh_repo.url,
-                        st.mode, st.start, st.end,
+                        issues_conn,
+                        Issue.from_graphql_node,
+                        st.gh_repo.url,
+                        st.mode,
+                        st.start,
+                        st.end,
                     )
                     st.issues.extend(items)
                     st.issues_cursor = cursor
@@ -281,8 +289,12 @@ async def fetch_repos(
                 if st.fetch_prs:
                     prs_conn = repo_data.get("pullRequests") or {}
                     items, needs_more, cursor = _process_connection(
-                        prs_conn, PullRequest.from_graphql_node, st.gh_repo.url,
-                        st.mode, st.start, st.end,
+                        prs_conn,
+                        PullRequest.from_graphql_node,
+                        st.gh_repo.url,
+                        st.mode,
+                        st.start,
+                        st.end,
                     )
                     st.prs.extend(items)
                     st.prs_cursor = cursor
@@ -290,7 +302,10 @@ async def fetch_repos(
 
     return [
         RepoResult(
-            st.repo, st.prs, st.issues, labels=st.labels,
+            st.repo,
+            st.prs,
+            st.issues,
+            labels=st.labels,
         )
         for st in all_states
     ]

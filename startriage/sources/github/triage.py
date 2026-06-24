@@ -21,6 +21,7 @@ from .models import GithubItemEntry, GitHubItemType, RepoResult
 
 logger = logging.getLogger(__name__)
 
+
 @dataclass
 class GithubTriage(TriageResult):
     """Holds all fetched GitHub results for one triage run."""
