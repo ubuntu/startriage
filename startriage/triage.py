@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
+import sys
 import traceback
 from datetime import time
 
@@ -162,8 +163,8 @@ async def _output_results(
     errors = [(s, e) for s, e in gathered if isinstance(e, Exception)]
     if errors:
         for source, exc in errors:
-            print(f"\nError fetching {source!r}:", file=output_cfg.out)
-            traceback.print_exception(exc, file=output_cfg.out)
+            print(f"\nError fetching {source!r}:", file=sys.stderr)
+            traceback.print_exception(exc, file=sys.stderr)
 
     return [(s, r) for s, r in gathered if not isinstance(r, Exception)]
 
