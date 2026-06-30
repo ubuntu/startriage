@@ -283,8 +283,9 @@ async def find(
 
     team_config = config.get_team(filter.team)
 
-    logger.info("Fetching Launchpad bugs (this may take a while)…")
+    logger.debug("Logging into Launchpad…")
     lp = connect_launchpad()
+    logger.debug("Fetching Launchpad bugs…")
     lp_tasks = await asyncio.to_thread(
         fetch_bugs,
         lp,

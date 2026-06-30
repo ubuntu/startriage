@@ -19,6 +19,8 @@ from ...source import TaskFilterOptions
 from .finder import DiscourseFinder
 from .models import DiscourseCategory, DiscoursePost, DiscourseTopic
 
+logger = logging.getLogger(__name__)
+
 
 class PostStatus(Enum):
     UNCHANGED = 0
@@ -131,7 +133,7 @@ class DiscourseTriage(TriageResult):
             return
 
         for result in self.results:
-            logging.info("Comments belonging to the %s category:", result.category_name)
+            logger.info("Comments belonging to the %s category:", result.category_name)
             await self._print_category_comments(
                 result.category,
                 self.filter.start,
@@ -363,19 +365,20 @@ async def find(
             if cat_id is not None:
                 resolved_triage_ids.add(cat_id)
             else:
-                logging.warning("Unable to find triage category: %s", cat_name)
+                logger.warning("Unable to find triage category: %s", cat_name)
 
         results: list[CategoryResult] = []
         for category_name in [c.strip() for c in team_config.discourse_categories]:
             category = await finder.get_category_by_name(session, category_name)
             if category is None:
-                logging.warning("Unable to find category: %s", category_name)
+                logger.warning("Unable to find category: %s", category_name)
                 continue
 
             await finder.add_topics_to_category(
                 session, category, ignore_before=filter.start, ignore_after=filter.end, site=site
             )
 
+            logger.info("Fetching Discourse comments…")
             # Fetch all topic posts concurrently
             topics = [t for t in category.get_topics() if tag is None or t.has_tag(tag)]
             await asyncio.gather(*[finder.add_posts_to_topic(session, t) for t in topics])

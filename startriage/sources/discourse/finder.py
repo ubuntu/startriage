@@ -12,6 +12,7 @@ import aiohttp
 from .models import DiscourseCategory, DiscoursePost, DiscourseTopic
 
 DISCOURSE_INSTANCE = "https://discourse.ubuntu.com"
+logger = logging.getLogger(__name__)
 
 
 class DiscourseFinder:
@@ -35,10 +36,10 @@ class DiscourseFinder:
             async with session.get(url) as resp:
                 if resp.status == 200:
                     return await resp.json(content_type=None)
-                logging.debug("HTTP %s fetching %s", resp.status, url)
+                logger.debug("HTTP %s fetching %s", resp.status, url)
                 return None
         except (aiohttp.ClientError, json.JSONDecodeError) as exc:
-            logging.debug("Error fetching %s: %s", url, exc)
+            logger.debug("Error fetching %s: %s", url, exc)
             return None
 
     def _extract_posts(self, json_output: dict) -> list[DiscoursePost]:
