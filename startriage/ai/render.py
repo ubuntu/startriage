@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 from datetime import date
 from pathlib import Path
+from typing import Any
 
 from ..enums import ProposedFixKind
 from .agent import BugOutcome
@@ -118,6 +119,67 @@ def render_report(outcomes: list[BugOutcome], day: date | None = None) -> str:
     if improvements:
         sections.append(f"## Suggested Improvements\n\n{improvements}")
 
+    return "\n\n".join(sections) + "\n"
+
+
+def _render_bug_metadata(payload: dict[str, Any]) -> str:
+    """Render one bug payload as human-readable metadata (no AI analysis)."""
+    number = payload.get("number") or "(unknown)"
+    title = payload.get("short_title") or payload.get("title") or "(no title)"
+    tags = payload.get("tags") or []
+
+    lines = [f"## LP #{number} — {title}", ""]
+    if payload.get("url"):
+        lines.append(f"**URL:** {payload['url']}")
+    lines.append(f"**Status:** {payload.get('status') or 'unknown'}")
+    lines.append(f"**Importance:** {payload.get('importance') or 'unknown'}")
+    if payload.get("heat") is not None:
+        lines.append(f"**Heat:** {payload['heat']}")
+    lines.append(f"**Tags:** {', '.join(tags) if tags else '_none_'}")
+    if payload.get("duplicate_of"):
+        lines.append(f"**Duplicate of:** LP #{payload['duplicate_of']}")
+
+    affected = payload.get("affected") or []
+    if affected:
+        lines += ["", "### Affected", ""]
+        for target in affected:
+            name = target.get("target") or "(unknown target)"
+            status = target.get("status") or "?"
+            importance = target.get("importance") or "?"
+            lines.append(f"- {name} — {status} ({importance})")
+
+    description = (payload.get("description") or "").strip()
+    lines += ["", "### Description", "", description or "_No description._"]
+
+    attachments = payload.get("attachments") or []
+    if attachments:
+        lines += ["", "### Attachments", ""]
+        for att in attachments:
+            title_text = att.get("title") or "(untitled)"
+            suffix = " [patch]" if att.get("is_patch") else ""
+            lines.append(f"- {title_text} ({att.get('type') or 'unknown'}){suffix}")
+
+    comments = payload.get("comments") or []
+    if comments:
+        lines += ["", f"### Comments ({len(comments)})"]
+        for comment in comments:
+            author = comment.get("author") or "unknown"
+            when = comment.get("date") or "unknown date"
+            text = (comment.get("text") or "").strip()
+            lines += ["", f"**{author}** — {when}", "", text or "_(empty)_"]
+
+    return "\n".join(lines)
+
+
+def render_bug_metadata(payloads: list[dict[str, Any]]) -> str:
+    """Render bug payloads as human-readable metadata, without any AI analysis.
+
+    This is what ``analyze`` prints when ``--ai`` is not given: the raw bug
+    context (status, tags, affected targets, description, comments) as gathered
+    for the agent, so a human can eyeball it before deciding to run the agent.
+    """
+    sections = ["# Bug metadata"]
+    sections += [_render_bug_metadata(payload) for payload in payloads]
     return "\n\n".join(sections) + "\n"
 
 

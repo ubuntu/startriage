@@ -3,14 +3,15 @@
 Two entry points feed bugs to the agent and write a dated report:
 
 - :func:`gather_user_bug_payloads` resolves user-supplied bug specs (URL,
-  ``NNNNNN`` or ``#NNNNNN``) into agent payloads (``ai-triage``).
+  ``NNNNNN`` or ``#NNNNNN``) into agent payloads (``analyze``).
 - :func:`payloads_from_tasks` turns already-fetched triage tasks into payloads
   (``triage --ai``).
 
 Both hand their payloads to :func:`run_agent_on_payloads`, which runs the agent
-sequentially and writes ``autotriage-YYYY-MM-DD.md``. Launchpad access is lazily
-imported inside the gather helpers so non-AI commands and offline tests never
-pull in launchpadlib.
+sequentially and writes ``autotriage-YYYY-MM-DD.md``. :func:`describe_bug_specs`
+shares the same gather step but only renders the raw bug metadata (``analyze``
+without ``--ai``). Launchpad access is lazily imported inside the gather helpers
+so non-AI commands and offline tests never pull in launchpadlib.
 """
 
 from __future__ import annotations
@@ -24,7 +25,7 @@ from ..config import StarTriageConfig
 from ..spinner import Spinner
 from .agent import load_system_prompt, triage_bugs
 from .provider import Provider, build_provider
-from .render import render_report
+from .render import render_bug_metadata, render_report
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -161,6 +162,19 @@ async def run_ai_over_bug_specs(
     if not payloads:
         return None
     return await run_agent_on_payloads(config, payloads, provider=provider)
+
+
+async def describe_bug_specs(bug_specs: list[str]) -> str | None:
+    """Resolve user-supplied bug specs and render their metadata (no AI agent).
+
+    Returns the rendered markdown, or ``None`` when no valid bug could be
+    resolved from ``bug_specs``. Launchpad access runs off-thread so the async
+    event loop is not blocked.
+    """
+    payloads = await asyncio.to_thread(gather_user_bug_payloads, bug_specs)
+    if not payloads:
+        return None
+    return render_bug_metadata(payloads)
 
 
 async def run_ai_over_triage_results(

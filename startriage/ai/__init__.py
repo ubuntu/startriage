@@ -18,8 +18,16 @@ from .provider import (
     build_provider,
     build_session_kwargs,
 )
-from .render import append_report, render_report, report_filename, resolve_report_dir, write_report
+from .render import (
+    append_report,
+    render_bug_metadata,
+    render_report,
+    report_filename,
+    resolve_report_dir,
+    write_report,
+)
 from .run import (
+    describe_bug_specs,
     gather_user_bug_payloads,
     parse_bug_number,
     payloads_from_tasks,
@@ -40,12 +48,14 @@ __all__ = [
     "build_client_kwargs",
     "build_provider",
     "build_session_kwargs",
+    "describe_bug_specs",
     "extract_json_block",
     "gather_user_bug_payloads",
     "load_system_prompt",
     "parse_agent_result",
     "parse_bug_number",
     "payloads_from_tasks",
+    "render_bug_metadata",
     "render_report",
     "report_filename",
     "resolve_report_dir",

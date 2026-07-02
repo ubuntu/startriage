@@ -12,6 +12,7 @@ from startriage.ai import (
     BugOutcome,
     ProposedFix,
     append_report,
+    render_bug_metadata,
     render_report,
     report_filename,
     resolve_report_dir,
@@ -49,6 +50,43 @@ def _outcome(result: AgentResult) -> BugOutcome:
 
 def test_report_filename():
     assert report_filename(_DAY) == "autotriage-2026-06-15.md"
+
+
+# --- bug metadata rendering ------------------------------------------------
+
+
+def test_render_bug_metadata_renders_key_fields():
+    payload = {
+        "number": "2101234",
+        "url": "https://bugs.launchpad.net/ubuntu/+bug/2101234",
+        "short_title": "boom on start",
+        "status": "Confirmed",
+        "importance": "High",
+        "heat": 42,
+        "tags": ["server-todo", "bitesize"],
+        "duplicate_of": "999",
+        "affected": [{"target": "pkg (Ubuntu)", "status": "Confirmed", "importance": "High"}],
+        "description": "It crashes immediately.",
+        "attachments": [{"title": "fix.patch", "type": "text/plain", "is_patch": True}],
+        "comments": [{"author": "alice", "date": "2026-06-15", "text": "Seeing this too."}],
+    }
+    rendered = render_bug_metadata([payload])
+    assert "# Bug metadata" in rendered
+    assert "## LP #2101234 — boom on start" in rendered
+    assert "**Status:** Confirmed" in rendered
+    assert "**Tags:** server-todo, bitesize" in rendered
+    assert "**Duplicate of:** LP #999" in rendered
+    assert "- pkg (Ubuntu) — Confirmed (High)" in rendered
+    assert "It crashes immediately." in rendered
+    assert "- fix.patch (text/plain) [patch]" in rendered
+    assert "**alice** — 2026-06-15" in rendered
+
+
+def test_render_bug_metadata_handles_sparse_payload():
+    rendered = render_bug_metadata([{"number": "1"}])
+    assert "## LP #1 — (no title)" in rendered
+    assert "**Tags:** _none_" in rendered
+    assert "_No description._" in rendered
 
 
 # --- proposed fix rendering ------------------------------------------------

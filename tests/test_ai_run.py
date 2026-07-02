@@ -135,10 +135,16 @@ async def test_run_agent_on_payloads_records_bad_agent_output():
 # --- CLI parser wiring -----------------------------------------------------
 
 
-def test_parser_ai_triage_accepts_multiple_bugs():
-    args = _build_parser().parse_args(["ai-triage", "123", "#456", "https://x/+bug/789"])
+def test_parser_analyze_accepts_multiple_bugs():
+    args = _build_parser().parse_args(["analyze", "123", "#456", "https://x/+bug/789"])
     assert args.bug == ["123", "#456", "https://x/+bug/789"]
-    assert args.func.__name__ == "_run_ai_triage"
+    assert args.func.__name__ == "_run_analyze"
+    assert args.ai is False
+
+
+def test_parser_analyze_ai_flag():
+    assert _build_parser().parse_args(["analyze", "123"]).ai is False
+    assert _build_parser().parse_args(["analyze", "--ai", "123"]).ai is True
 
 
 def test_parser_triage_ai_flag_defaults_false():

@@ -202,18 +202,23 @@ GREEN = done
     todo_p.add_argument("-C", "--compare", metavar="PATH", help="Set path to saved file to compare bugs to")
     todo_p.set_defaults(func=_run_todo)
 
-    # --- ai-triage ---
-    ai_triage_p = sp.add_parser(
-        "ai-triage",
-        help="AI-triage one or more Launchpad bugs",
+    # --- analyze ---
+    analyze_p = sp.add_parser(
+        "analyze",
+        help="Show metadata for one or more Launchpad bugs (add --ai to run the agent)",
     )
-    ai_triage_p.add_argument(
+    analyze_p.add_argument(
         "bug",
         nargs="+",
         metavar="BUG",
-        help="Launchpad bug to triage: full URL, NNNNNN, or #NNNNNN",
+        help="Launchpad bug to analyze: full URL, NNNNNN, or #NNNNNN",
     )
-    ai_triage_p.set_defaults(func=_run_ai_triage)
+    analyze_p.add_argument(
+        "--ai",
+        action="store_true",
+        help="Run the AI agent over the bug(s) and write a report instead of just showing metadata",
+    )
+    analyze_p.set_defaults(func=_run_analyze)
 
     # --- config ---
     config_p = sp.add_parser("config", help="Manage configuration")
@@ -455,7 +460,17 @@ def _emit_ai_report(report: str, markdown_path: Path | None, report_dir: Path | 
         print(f"AI triage report written to {path}")
 
 
-async def _run_ai_triage(args: argparse.Namespace, config: StarTriageConfig) -> None:
+async def _run_analyze(args: argparse.Namespace, config: StarTriageConfig) -> None:
+    if not args.ai:
+        from .ai import describe_bug_specs
+
+        report = await describe_bug_specs(args.bug)
+        if report is None:
+            print("No valid bugs found.", file=sys.stderr)
+            return
+        print(report)
+        return
+
     from .ai import run_ai_over_bug_specs
 
     provider = _build_ai_provider(config)
