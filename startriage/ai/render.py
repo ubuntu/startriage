@@ -121,32 +121,50 @@ def render_report(outcomes: list[BugOutcome], day: date | None = None) -> str:
     return "\n\n".join(sections) + "\n"
 
 
+def resolve_report_dir(preferred_dir: Path | None = None) -> Path:
+    """Pick and verify a writable directory for the report *before* triage runs.
+
+    Probes ``preferred_dir`` (default: cwd) and, failing that, ``$SNAP_USER_DATA``
+    (for the strict-snap read-only cwd case), by actually creating and removing a
+    probe file. Returns the first writable directory so the eventual write cannot
+    fail after an expensive agent run. Raises :class:`OSError` when no candidate is
+    writable.
+    """
+    candidates: list[Path] = [preferred_dir or Path.cwd()]
+    snap_data = os.environ.get("SNAP_USER_DATA")
+    if snap_data:
+        candidates.append(Path(snap_data))
+
+    last_error: OSError | None = None
+    for candidate in candidates:
+        try:
+            candidate.mkdir(parents=True, exist_ok=True)
+            probe = candidate / ".startriage-write-probe"
+            probe.write_text("", encoding="utf-8")
+            probe.unlink()
+            return candidate
+        except OSError as exc:
+            last_error = exc
+
+    raise last_error or OSError("no writable report directory found")
+
+
 def write_report(
     content: str,
     day: date | None = None,
-    preferred_dir: Path | None = None,
+    report_dir: Path | None = None,
 ) -> Path:
-    """Write ``content`` to the report file, falling back to ``SNAP_USER_DATA``.
+    """Write ``content`` to the report file in ``report_dir``.
 
-    Writes into ``preferred_dir`` (default: cwd). If that is not writable (e.g. a
-    strict-snap read-only cwd), fall back to ``$SNAP_USER_DATA`` when set, otherwise
-    re-raise the original error.
+    ``report_dir`` should be a directory already validated by
+    :func:`resolve_report_dir`; when omitted it is resolved now (default: cwd,
+    falling back to ``$SNAP_USER_DATA``). The location is chosen up front so a
+    write never fails after an expensive triage run.
     """
-    name = report_filename(day)
-    target_dir = preferred_dir or Path.cwd()
-    target = target_dir / name
-    try:
-        target.write_text(content, encoding="utf-8")
-        return target
-    except OSError:
-        snap_data = os.environ.get("SNAP_USER_DATA")
-        if not snap_data:
-            raise
-        fallback_dir = Path(snap_data)
-        fallback_dir.mkdir(parents=True, exist_ok=True)
-        fallback = fallback_dir / name
-        fallback.write_text(content, encoding="utf-8")
-        return fallback
+    target_dir = report_dir or resolve_report_dir()
+    target = target_dir / report_filename(day)
+    target.write_text(content, encoding="utf-8")
+    return target
 
 
 def append_report(path: Path, content: str) -> Path:

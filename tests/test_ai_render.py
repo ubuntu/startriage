@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import date
 from pathlib import Path
 
+import pytest
+
 from startriage.ai import (
     AgentResult,
     BugOutcome,
@@ -12,6 +14,7 @@ from startriage.ai import (
     append_report,
     render_report,
     report_filename,
+    resolve_report_dir,
     write_report,
 )
 from startriage.ai.render import AI_APPEND_NOTICE, _render_proposed_fix
@@ -145,16 +148,16 @@ def test_render_report_deduplicates_improvements():
     assert "Different note." in improvements
 
 
-# --- write_report ----------------------------------------------------------
+# --- write_report / resolve_report_dir -------------------------------------
 
 
-def test_write_report_to_preferred_dir(tmp_path):
-    path = write_report("content", day=_DAY, preferred_dir=tmp_path)
+def test_write_report_to_report_dir(tmp_path):
+    path = write_report("content", day=_DAY, report_dir=tmp_path)
     assert path == tmp_path / "autotriage-2026-06-15.md"
     assert path.read_text() == "content"
 
 
-def test_write_report_falls_back_to_snap_user_data(tmp_path, monkeypatch):
+def test_resolve_report_dir_falls_back_to_snap_user_data(tmp_path, monkeypatch):
     readonly = tmp_path / "readonly"
     readonly.mkdir()
     readonly.chmod(0o500)
@@ -162,34 +165,32 @@ def test_write_report_falls_back_to_snap_user_data(tmp_path, monkeypatch):
     monkeypatch.setenv("SNAP_USER_DATA", str(snap))
 
     try:
-        path = write_report("body", day=_DAY, preferred_dir=readonly)
+        resolved = resolve_report_dir(readonly)
     finally:
         readonly.chmod(0o700)
 
+    assert resolved == snap
+    path = write_report("body", day=_DAY, report_dir=resolved)
     assert path == snap / "autotriage-2026-06-15.md"
     assert path.read_text() == "body"
 
 
-def test_write_report_reraises_without_snap(tmp_path, monkeypatch):
+def test_resolve_report_dir_raises_without_snap(tmp_path, monkeypatch):
     readonly = tmp_path / "readonly"
     readonly.mkdir()
     readonly.chmod(0o500)
     monkeypatch.delenv("SNAP_USER_DATA", raising=False)
 
     try:
-        with_error = None
-        try:
-            write_report("body", day=_DAY, preferred_dir=readonly)
-        except OSError as exc:
-            with_error = exc
+        with pytest.raises(OSError):
+            resolve_report_dir(readonly)
     finally:
         readonly.chmod(0o700)
-
-    assert with_error is not None
 
 
 def test_write_report_defaults_to_cwd(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("SNAP_USER_DATA", raising=False)
     path = write_report("x", day=_DAY)
     assert path == Path.cwd() / "autotriage-2026-06-15.md"
     assert path.read_text() == "x"
