@@ -32,10 +32,16 @@ class Spinner:
     ) -> None:
         self._pending = set(pending)
         self._status = status
+        # A spinner only makes sense on an interactive terminal. When stderr is
+        # piped/redirected (CI, logs) and no explicit sink is given, become a
+        # no-op so callers can always use the spinner unconditionally.
+        self._enabled = bool(out) or sys.stderr.isatty()
         if out:
             self._write = out
-        else:
+        elif self._enabled:
             self._write = lambda s: (sys.stderr.write(s), sys.stderr.flush())
+        else:
+            self._write = lambda _s: None
         self._interval = interval
         self._draw = asyncio.Event()
         self._draw.set()
@@ -67,6 +73,8 @@ class Spinner:
         self._write("\x1b[2K\r")
 
     async def _run(self) -> None:
+        if not self._enabled:
+            return
         i = 0
         while not self._stop.is_set():
             await self._draw.wait()

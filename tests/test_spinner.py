@@ -33,3 +33,13 @@ async def test_spinner_status_overrides_pending_set():
     rendered = "".join(frames)
     assert "Working…" in rendered
     assert "launchpad" not in rendered
+
+
+@pytest.mark.asyncio
+async def test_spinner_is_noop_when_not_a_tty(monkeypatch):
+    # With no explicit sink and a non-TTY stderr, the spinner writes nothing.
+    monkeypatch.setattr("startriage.spinner.sys.stderr.isatty", lambda: False)
+    spinner = Spinner({"launchpad"}, status="Working…", interval=1 / 1000)
+    assert spinner._enabled is False
+    async with spinner:
+        await asyncio.sleep(0.02)
