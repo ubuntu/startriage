@@ -18,12 +18,14 @@ from .provider import (
     build_provider,
     build_session_kwargs,
 )
-from .render import append_report, render_report, report_filename, write_report
+from .render import append_report, render_report, report_filename, resolve_report_dir, write_report
 from .run import (
     gather_user_bug_payloads,
     parse_bug_number,
     payloads_from_tasks,
     run_agent_on_payloads,
+    run_ai_over_bug_specs,
+    run_ai_over_triage_results,
 )
 
 __all__ = [
@@ -46,7 +48,10 @@ __all__ = [
     "payloads_from_tasks",
     "render_report",
     "report_filename",
+    "resolve_report_dir",
     "run_agent_on_payloads",
+    "run_ai_over_bug_specs",
+    "run_ai_over_triage_results",
     "triage_bug",
     "triage_bugs",
     "write_report",

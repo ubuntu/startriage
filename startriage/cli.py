@@ -5,9 +5,9 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
-from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from .config import (
     DEFAULT_USER_CONFIG,
@@ -20,11 +20,14 @@ from .config import (
 from .dates import parse_interval, triage_task_date_range
 from .enums import AIProvider, UpdateFilter
 from .log import log_setup
-from .output import OutputConfig, OutputFormat, TriageResult
+from .output import OutputConfig, OutputFormat
 from .savebugs import BugPersistor, SaveConfig
 from .source import TaskFilterOptions
 from .sources.github.auth import _run_github_login
 from .triage import SOURCES, resolve_sources, run_todo, run_triage
+
+if TYPE_CHECKING:
+    from .ai import Provider
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -355,12 +358,24 @@ async def _run() -> None:
 
 async def _run_triage(args: argparse.Namespace, config: StarTriageConfig) -> None:
     provider = None
+    report_dir = None
+    output_cfg = _outputcfg_from_args(args)
     if args.ai:
         # Validate AI credentials up-front so a misconfig fails before the (slow)
         # normal triage run rather than after it.
         provider = _build_ai_provider(config)
         if provider is None:
             return
+        if output_cfg.markdown_path is None:
+            # Pick and verify the report location before the expensive agent run
+            # so writing the report cannot fail afterwards.
+            from .ai import resolve_report_dir
+
+            try:
+                report_dir = resolve_report_dir()
+            except OSError as exc:
+                print(f"error: cannot write triage report: {exc}", file=sys.stderr)
+                return
 
     filter = _filter_from_args(config, args)
     team = config.get_team(filter.team)
@@ -378,11 +393,14 @@ async def _run_triage(args: argparse.Namespace, config: StarTriageConfig) -> Non
         general = general.model_copy(update={"proposed_min_age": args.proposed_min_age})
     config.general = general
 
-    output_cfg = _outputcfg_from_args(args)
     results = await run_triage(config, filter, output_cfg)
 
     if args.ai:
-        await _ai_triage_results(config, results, provider, output_cfg.markdown_path)
+        from .ai import run_ai_over_triage_results
+
+        report = await run_ai_over_triage_results(config, results, provider=provider)
+        if report is not None:
+            _emit_ai_report(report, output_cfg.markdown_path, report_dir)
 
 
 async def _run_todo(args: argparse.Namespace, config: StarTriageConfig) -> None:
@@ -408,7 +426,7 @@ async def _run_todo(args: argparse.Namespace, config: StarTriageConfig) -> None:
     )
 
 
-def _build_ai_provider(config: StarTriageConfig):
+def _build_ai_provider(config: StarTriageConfig) -> Provider | None:
     """Build the AI provider, printing a friendly hint and returning None on misconfig."""
     from .ai import build_provider
 
@@ -419,35 +437,13 @@ def _build_ai_provider(config: StarTriageConfig):
         return None
 
 
-async def _ai_triage_results(
-    config: StarTriageConfig,
-    results: Sequence[tuple[str, TriageResult]],
-    provider,
-    markdown_path: Path | None,
-) -> None:
-    """Run the AI agent over the Launchpad tasks gathered by a normal triage run."""
-    from .ai import payloads_from_tasks, run_agent_on_payloads
-    from .sources.launchpad.triage import LaunchpadTriage
-
-    tasks: list = []
-    for _, result in results:
-        if isinstance(result, LaunchpadTriage):
-            tasks = list(result.tasks.tasks)
-            break
-
-    payloads = await asyncio.to_thread(payloads_from_tasks, tasks)
-    report = await run_agent_on_payloads(config, payloads, provider=provider)
-    if report is None:
-        return
-    _emit_ai_report(report, markdown_path)
-
-
-def _emit_ai_report(report: str, markdown_path: Path | None) -> None:
+def _emit_ai_report(report: str, markdown_path: Path | None, report_dir: Path | None = None) -> None:
     """Persist an AI ``report`` for a ``triage --ai`` run.
 
     With ``--markdown`` the report is appended (behind a notice) to that file,
     mirroring how the normal triage markdown is produced. Otherwise it is written
-    to a dated ``autotriage-<date>.md`` file and the path is shown on stdout.
+    to a dated ``autotriage-<date>.md`` file in ``report_dir`` (resolved up front)
+    and the path is shown on stdout.
     """
     from .ai import append_report, write_report
 

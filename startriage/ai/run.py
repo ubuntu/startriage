@@ -15,10 +15,9 @@ pull in launchpadlib.
 
 from __future__ import annotations
 
-import contextlib
+import asyncio
 import logging
 import re
-import sys
 from typing import TYPE_CHECKING, Any
 
 from ..config import StarTriageConfig
@@ -28,6 +27,9 @@ from .provider import Provider, build_provider
 from .render import render_report
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from ..output import TriageResult
     from ..sources.launchpad.models import Task
 
 logger = logging.getLogger(__name__)
@@ -99,17 +101,12 @@ def payloads_from_tasks(tasks: list[Task]) -> list[dict[str, Any]]:
     return payloads
 
 
-def _make_spinner(total: int) -> Spinner | None:
-    """Return a status spinner, or ``None`` when one would be unhelpful/noisy.
+def _make_spinner(total: int) -> Spinner:
+    """Return a status spinner for the triage run.
 
-    Suppressed when stderr is not a TTY (piped/CI) or when INFO logging is on
-    (``-v``/``-vv``), since the agent loop already logs per-bug progress there
-    and a redrawing spinner would corrupt the log stream.
+    The spinner is a no-op when stderr is not a TTY (piped/CI), so callers can
+    always use it unconditionally; that TTY handling lives in :class:`Spinner`.
     """
-    if not sys.stderr.isatty():
-        return None
-    if logging.getLogger("startriage").isEnabledFor(logging.INFO):
-        return None
     noun = "bug" if total == 1 else "bugs"
     return Spinner(set(), status=f"Preparing to triage {total} {noun}…")
 
@@ -139,11 +136,51 @@ async def run_agent_on_payloads(
     spinner = _make_spinner(len(payloads))
 
     def on_progress(index: int, total: int, bug: str) -> None:
-        if spinner is not None:
-            label = f"LP #{bug}" if bug else "bug"
-            spinner.set_status(f"Triaging {label} ({index}/{total})…")
+        label = f"LP #{bug}" if bug else "bug"
+        spinner.set_status(f"Triaging {label} ({index}/{total})…")
 
-    async with spinner if spinner is not None else contextlib.nullcontext():
+    async with spinner:
         outcomes = await triage_bugs(provider, payloads, system_prompt, on_progress=on_progress)
 
     return render_report(outcomes)
+
+
+async def run_ai_over_bug_specs(
+    config: StarTriageConfig,
+    bug_specs: list[str],
+    *,
+    provider: Provider | None = None,
+) -> str | None:
+    """Resolve user-supplied bug specs and run the agent, returning the report.
+
+    Returns the rendered markdown, or ``None`` when no valid bug could be
+    resolved from ``bug_specs``. Launchpad access runs off-thread so the async
+    event loop is not blocked.
+    """
+    payloads = await asyncio.to_thread(gather_user_bug_payloads, bug_specs)
+    if not payloads:
+        return None
+    return await run_agent_on_payloads(config, payloads, provider=provider)
+
+
+async def run_ai_over_triage_results(
+    config: StarTriageConfig,
+    results: Sequence[tuple[str, TriageResult]],
+    *,
+    provider: Provider | None = None,
+) -> str | None:
+    """Run the agent over the Launchpad tasks gathered by a normal triage run.
+
+    Returns the rendered markdown, or ``None`` when there are no Launchpad tasks
+    to triage. Launchpad payload construction runs off-thread.
+    """
+    from ..sources.launchpad.triage import LaunchpadTriage
+
+    tasks: list[Task] = []
+    for _, result in results:
+        if isinstance(result, LaunchpadTriage):
+            tasks = list(result.tasks.tasks)
+            break
+
+    payloads = await asyncio.to_thread(payloads_from_tasks, tasks)
+    return await run_agent_on_payloads(config, payloads, provider=provider)
