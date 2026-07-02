@@ -74,6 +74,7 @@ async def triage_bug(
         raw = await provider.run(system_prompt, user_message)
     except Exception as exc:
         # Record any provider/runtime failure and keep going (skip-and-continue).
+        logger.warning("Bug %s: provider run failed", bug, exc_info=True)
         return BugOutcome(bug=bug, result=None, error=f"provider error: {exc}", raw="")
     logger.debug("Bug %s: received %d-char agent response", bug, len(raw))
     try:
