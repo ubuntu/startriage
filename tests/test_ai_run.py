@@ -43,15 +43,27 @@ _CANNED = """Here is my analysis.
         ("https://bugs.launchpad.net/ubuntu/+bug/123456", "123456"),
         ("https://bugs.launchpad.net/ubuntu/+source/python3.12/+bug/987", "987"),
         ("  #42  ", "42"),
+        ("https://launchpad.net/bugs/555", "555"),
     ],
 )
 def test_parse_bug_number(spec, expected):
     assert parse_bug_number(spec) == expected
 
 
-def test_parse_bug_number_invalid():
+@pytest.mark.parametrize(
+    "spec",
+    [
+        "not-a-bug",
+        "",
+        "12ab",
+        # Arbitrary URLs that merely contain digits must NOT resolve to a bug.
+        "https://myponyadventure.lol/pages/3133742/cute.png",
+        "https://example.com/issues/42",
+    ],
+)
+def test_parse_bug_number_invalid(spec):
     with pytest.raises(ValueError):
-        parse_bug_number("not-a-bug")
+        parse_bug_number(spec)
 
 
 # --- payloads_from_tasks ---------------------------------------------------

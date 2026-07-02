@@ -32,19 +32,27 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_BUG_DIGITS = re.compile(r"\d+")
+# A bare bug number, optionally ``#``-prefixed.
+_BARE_BUG = re.compile(r"^#?(\d+)$")
+# A genuine Launchpad bug reference inside a URL (``.../+bug/<n>`` or ``.../bugs/<n>``).
+_URL_BUG = re.compile(r"launchpad\.net/(?:.*/)?(?:\+bug|bugs)/(\d+)", re.IGNORECASE)
 
 
 def parse_bug_number(spec: str) -> str:
-    """Extract a Launchpad bug number from a URL, ``#NNNNNN`` or bare ``NNNNNN``.
+    """Extract a Launchpad bug number from a bare ``NNNNNN``, ``#NNNNNN`` or LP URL.
 
-    The last run of digits wins, so package names containing digits in a full
-    ``.../+source/<pkg>/+bug/<n>`` URL do not confuse the parse.
+    Only real Launchpad bug references are accepted. Arbitrary URLs or text that
+    merely happen to contain digits (e.g. ``https://example.com/pages/3133742``)
+    raise :class:`ValueError` rather than silently resolving to a wrong number.
     """
-    matches = _BUG_DIGITS.findall(spec)
-    if not matches:
-        raise ValueError(f"could not parse a Launchpad bug number from {spec!r}")
-    return matches[-1]
+    spec = spec.strip()
+    bare = _BARE_BUG.match(spec)
+    if bare:
+        return bare.group(1)
+    url = _URL_BUG.search(spec)
+    if url:
+        return url.group(1)
+    raise ValueError(f"could not parse a Launchpad bug number from {spec!r}")
 
 
 def gather_user_bug_payloads(bug_specs: list[str]) -> list[dict[str, Any]]:
