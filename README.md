@@ -58,10 +58,9 @@ Run `startriage triage --help` for the full option reference, including the bug 
 Inspect one or more Launchpad bugs, optionally running an AI agent over them. By
 default `analyze` prints the bug metadata (status, tags, affected targets,
 description, comments) so you can eyeball it — no provider or credentials
-required. Add `--ai` to run the agent, which produces a dated
-`autotriage-YYYY-MM-DD.md` report with a suggested status, tags, analysis, and
-(where applicable) a proposed fix. The agent never edits bugs and never applies
-patches — it only writes the report.
+required. Add `--ai` to run the agent, which produces a suggested status, tags,
+analysis, and (where applicable) a proposed fix. The agent never edits bugs and
+never applies patches — it only prints its analysis.
 
 ```bash
 # Show metadata for one or more specific bugs (URL, NNNNNN, or #NNNNNN)
@@ -73,6 +72,10 @@ startriage analyze --ai 2101234 '#2105678'
 # Run the normal daily triage, then AI-triage every bug found
 startriage triage --ai
 ```
+
+The AI output is printed after the normal triage results. With `--markdown FILE`
+the AI section is folded into that same report file (behind a clear "review
+critically" notice) so you get a single cohesive document.
 
 Configure a provider first (credentials are written to the 0600 config, never
 echoed):

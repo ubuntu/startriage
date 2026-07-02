@@ -1,11 +1,8 @@
-"""Tests for the triage report renderer (golden render + write fallback)."""
+"""Tests for the triage report renderer (golden render + append)."""
 
 from __future__ import annotations
 
 from datetime import date
-from pathlib import Path
-
-import pytest
 
 from startriage.ai import (
     AgentResult,
@@ -14,9 +11,6 @@ from startriage.ai import (
     append_report,
     render_bug_metadata,
     render_report,
-    report_filename,
-    resolve_report_dir,
-    write_report,
 )
 from startriage.ai.render import AI_APPEND_NOTICE, _render_proposed_fix
 from startriage.enums import ProposedFixKind, TriageStatus
@@ -43,13 +37,6 @@ def _result(**overrides) -> AgentResult:
 
 def _outcome(result: AgentResult) -> BugOutcome:
     return BugOutcome(bug=result.bug, result=result, error=None, raw="{}")
-
-
-# --- report_filename -------------------------------------------------------
-
-
-def test_report_filename():
-    assert report_filename(_DAY) == "autotriage-2026-06-15.md"
 
 
 # --- bug metadata rendering ------------------------------------------------
@@ -186,52 +173,7 @@ def test_render_report_deduplicates_improvements():
     assert "Different note." in improvements
 
 
-# --- write_report / resolve_report_dir -------------------------------------
-
-
-def test_write_report_to_report_dir(tmp_path):
-    path = write_report("content", day=_DAY, report_dir=tmp_path)
-    assert path == tmp_path / "autotriage-2026-06-15.md"
-    assert path.read_text() == "content"
-
-
-def test_resolve_report_dir_falls_back_to_snap_user_data(tmp_path, monkeypatch):
-    readonly = tmp_path / "readonly"
-    readonly.mkdir()
-    readonly.chmod(0o500)
-    snap = tmp_path / "snap"
-    monkeypatch.setenv("SNAP_USER_DATA", str(snap))
-
-    try:
-        resolved = resolve_report_dir(readonly)
-    finally:
-        readonly.chmod(0o700)
-
-    assert resolved == snap
-    path = write_report("body", day=_DAY, report_dir=resolved)
-    assert path == snap / "autotriage-2026-06-15.md"
-    assert path.read_text() == "body"
-
-
-def test_resolve_report_dir_raises_without_snap(tmp_path, monkeypatch):
-    readonly = tmp_path / "readonly"
-    readonly.mkdir()
-    readonly.chmod(0o500)
-    monkeypatch.delenv("SNAP_USER_DATA", raising=False)
-
-    try:
-        with pytest.raises(OSError):
-            resolve_report_dir(readonly)
-    finally:
-        readonly.chmod(0o700)
-
-
-def test_write_report_defaults_to_cwd(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.delenv("SNAP_USER_DATA", raising=False)
-    path = write_report("x", day=_DAY)
-    assert path == Path.cwd() / "autotriage-2026-06-15.md"
-    assert path.read_text() == "x"
+# --- append_report ---------------------------------------------------------
 
 
 def test_append_report_adds_notice_after_existing_content(tmp_path):

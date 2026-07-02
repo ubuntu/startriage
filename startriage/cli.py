@@ -182,8 +182,8 @@ GREEN = done
         "--ai",
         action="store_true",
         help=(
-            "Also run AI triage on every bug found. With --markdown the AI report is "
-            "appended to that file; otherwise it is written to autotriage-YYYY-MM-DD.md"
+            "Also run AI triage on every bug found. The AI section is printed after the "
+            "normal output, or with --markdown folded into that single report file"
         ),
     )
     triage_p.set_defaults(func=_run_triage)
@@ -363,7 +363,6 @@ async def _run() -> None:
 
 async def _run_triage(args: argparse.Namespace, config: StarTriageConfig) -> None:
     provider = None
-    report_dir = None
     output_cfg = _outputcfg_from_args(args)
     if args.ai:
         # Validate AI credentials up-front so a misconfig fails before the (slow)
@@ -371,16 +370,6 @@ async def _run_triage(args: argparse.Namespace, config: StarTriageConfig) -> Non
         provider = _build_ai_provider(config)
         if provider is None:
             return
-        if output_cfg.markdown_path is None:
-            # Pick and verify the report location before the expensive agent run
-            # so writing the report cannot fail afterwards.
-            from .ai import resolve_report_dir
-
-            try:
-                report_dir = resolve_report_dir()
-            except OSError as exc:
-                print(f"error: cannot write triage report: {exc}", file=sys.stderr)
-                return
 
     filter = _filter_from_args(config, args)
     team = config.get_team(filter.team)
@@ -405,7 +394,7 @@ async def _run_triage(args: argparse.Namespace, config: StarTriageConfig) -> Non
 
         report = await run_ai_over_triage_results(config, results, provider=provider)
         if report is not None:
-            _emit_ai_report(report, output_cfg.markdown_path, report_dir)
+            _emit_ai_report(report, output_cfg.markdown_path)
 
 
 async def _run_todo(args: argparse.Namespace, config: StarTriageConfig) -> None:
@@ -442,22 +431,22 @@ def _build_ai_provider(config: StarTriageConfig) -> Provider | None:
         return None
 
 
-def _emit_ai_report(report: str, markdown_path: Path | None, report_dir: Path | None = None) -> None:
-    """Persist an AI ``report`` for a ``triage --ai`` run.
+def _emit_ai_report(report: str, markdown_path: Path | None) -> None:
+    """Emit an AI ``report`` for a ``triage --ai`` run.
 
-    With ``--markdown`` the report is appended (behind a notice) to that file,
-    mirroring how the normal triage markdown is produced. Otherwise it is written
-    to a dated ``autotriage-<date>.md`` file in ``report_dir`` (resolved up front)
-    and the path is shown on stdout.
+    With ``--markdown`` the AI section is appended (behind a review notice) to
+    that same file, so the human triage report and the AI aid live in one
+    cohesive document. Without ``--markdown`` the report is printed to stdout,
+    together with the normal triage output that already went there.
     """
-    from .ai import append_report, write_report
+    from .ai import append_report
+    from .ai.render import AI_APPEND_NOTICE
 
     if markdown_path is not None:
         append_report(markdown_path, report)
         print(f"AI triage appended to {markdown_path}")
     else:
-        path = write_report(report, report_dir=report_dir)
-        print(f"AI triage report written to {path}")
+        print("\n" + AI_APPEND_NOTICE + report)
 
 
 async def _run_analyze(args: argparse.Namespace, config: StarTriageConfig) -> None:

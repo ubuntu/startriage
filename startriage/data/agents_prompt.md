@@ -143,8 +143,7 @@ For each bug in the input:
 ## Output
 
 You do NOT write any files. For each bug, **return a single JSON object** with this
-exact schema (the surrounding tool renders it into the `autotriage-YYYY-MM-DD.md`
-report):
+exact schema (the surrounding tool renders it into the triage report):
 
 ```json
 {

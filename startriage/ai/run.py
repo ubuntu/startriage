@@ -1,6 +1,6 @@
 """End-to-end orchestration that wires the AI layer to the CLI.
 
-Two entry points feed bugs to the agent and write a dated report:
+Two entry points feed bugs to the agent and render a report:
 
 - :func:`gather_user_bug_payloads` resolves user-supplied bug specs (URL,
   ``NNNNNN`` or ``#NNNNNN``) into agent payloads (``analyze``).
@@ -8,7 +8,8 @@ Two entry points feed bugs to the agent and write a dated report:
   (``triage --ai``).
 
 Both hand their payloads to :func:`run_agent_on_payloads`, which runs the agent
-sequentially and writes ``autotriage-YYYY-MM-DD.md``. :func:`describe_bug_specs`
+sequentially and returns the rendered markdown; emitting it (printing or folding
+it into a triage markdown file) is left to the caller. :func:`describe_bug_specs`
 shares the same gather step but only renders the raw bug metadata (``analyze``
 without ``--ai``). Launchpad access is lazily imported inside the gather helpers
 so non-AI commands and offline tests never pull in launchpadlib.
@@ -121,9 +122,9 @@ async def run_agent_on_payloads(
     """Run the agent over ``payloads`` and return the rendered markdown report.
 
     Returns the markdown string, or ``None`` when there is nothing to triage.
-    Emitting the report (printing, writing a dated file, or appending to a
-    triage markdown file) is left to the caller. When ``provider`` is omitted it
-    is built from ``config`` (validating credentials, which may raise
+    Emitting the report (printing it or folding it into a triage markdown file)
+    is left to the caller. When ``provider`` is omitted it is built from
+    ``config`` (validating credentials, which may raise
     :class:`~startriage.config.AIConfigError`).
     """
     if not payloads:

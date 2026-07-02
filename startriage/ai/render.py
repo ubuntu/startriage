@@ -1,15 +1,15 @@
-"""Render triage results into the ``autotriage-YYYY-MM-DD.md`` report.
+"""Render triage results into markdown.
 
 This is the tool side of the agent→tool contract: the agent only returns JSON, and
 this module turns a batch of :class:`~startriage.ai.agent.BugOutcome` into markdown.
 Proposed fixes are only *rendered* (a ``diff`` is shown in a fenced block, never
 applied to any source tree), and per-bug failures are recorded so a skipped bug is
-still visible in the report.
+still visible in the report. The rendered markdown is returned to the caller, which
+decides how to emit it (print to stdout or append to a triage markdown file).
 """
 
 from __future__ import annotations
 
-import os
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -26,11 +26,6 @@ AI_APPEND_NOTICE = (
     "agent. Review it critically — do **not** paste it into the official triage "
     "report verbatim.\n\n"
 )
-
-
-def report_filename(day: date | None = None) -> str:
-    """Return the report file name for ``day`` (defaults to today)."""
-    return f"autotriage-{(day or date.today()).isoformat()}.md"
 
 
 def _render_proposed_fix(fix: ProposedFix) -> str:
@@ -181,52 +176,6 @@ def render_bug_metadata(payloads: list[dict[str, Any]]) -> str:
     sections = ["# Bug metadata"]
     sections += [_render_bug_metadata(payload) for payload in payloads]
     return "\n\n".join(sections) + "\n"
-
-
-def resolve_report_dir(preferred_dir: Path | None = None) -> Path:
-    """Pick and verify a writable directory for the report *before* triage runs.
-
-    Probes ``preferred_dir`` (default: cwd) and, failing that, ``$SNAP_USER_DATA``
-    (for the strict-snap read-only cwd case), by actually creating and removing a
-    probe file. Returns the first writable directory so the eventual write cannot
-    fail after an expensive agent run. Raises :class:`OSError` when no candidate is
-    writable.
-    """
-    candidates: list[Path] = [preferred_dir or Path.cwd()]
-    snap_data = os.environ.get("SNAP_USER_DATA")
-    if snap_data:
-        candidates.append(Path(snap_data))
-
-    last_error: OSError | None = None
-    for candidate in candidates:
-        try:
-            candidate.mkdir(parents=True, exist_ok=True)
-            probe = candidate / ".startriage-write-probe"
-            probe.write_text("", encoding="utf-8")
-            probe.unlink()
-            return candidate
-        except OSError as exc:
-            last_error = exc
-
-    raise last_error or OSError("no writable report directory found")
-
-
-def write_report(
-    content: str,
-    day: date | None = None,
-    report_dir: Path | None = None,
-) -> Path:
-    """Write ``content`` to the report file in ``report_dir``.
-
-    ``report_dir`` should be a directory already validated by
-    :func:`resolve_report_dir`; when omitted it is resolved now (default: cwd,
-    falling back to ``$SNAP_USER_DATA``). The location is chosen up front so a
-    write never fails after an expensive triage run.
-    """
-    target_dir = report_dir or resolve_report_dir()
-    target = target_dir / report_filename(day)
-    target.write_text(content, encoding="utf-8")
-    return target
 
 
 def append_report(path: Path, content: str) -> Path:
