@@ -37,7 +37,7 @@ def test_general_override(tmp_path):
         [general]
         lp_extended = true
         savebugs_dir = "{bugs_dir}"
-    """,
+        """,
     )
     config = load_config(p)
     assert config.general.lp_extended is True
@@ -54,7 +54,7 @@ def test_team_override_replaces_ignore_list(tmp_path):
         lp_ignore_packages = []
         discourse_categories = ["project/server"]
         github_repos = []
-    """,
+        """,
     )
     config = load_config(p)
     assert config.team["ubuntu-server"].lp_ignore_packages == []
@@ -70,7 +70,7 @@ def test_custom_team_added(tmp_path):
         lp_ignore_packages = []
         discourse_categories = ["desktop"]
         github_repos = []
-    """,
+        """,
     )
     config = load_config(p)
     assert "ubuntu-desktop" in config.team
@@ -95,7 +95,7 @@ def test_invalid_lp_triage_updates_filter(tmp_path):
         """\
         [general]
         lp_triage_updates = "invalid_value"
-    """,
+        """,
     )
     with pytest.raises(ValidationError):
         load_config(p)
@@ -107,7 +107,7 @@ def test_extra_field_rejected(tmp_path):
         """\
         [general]
         typo_field = true
-    """,
+        """,
     )
     with pytest.raises(ValidationError):
         load_config(p)
@@ -119,7 +119,7 @@ def test_github_token_config(tmp_path):
         """\
         [general]
         github_token = "ghp_secret"
-    """,
+        """,
     )
     config = load_config(p)
     assert config.general.github_token == "ghp_secret"
@@ -141,7 +141,7 @@ def test_ai_override(tmp_path):
         provider = "openrouter"
         model = "anthropic/claude-3.5-sonnet"
         openrouter_api_key = "or_secret"
-    """,
+        """,
     )
     config = load_config(p)
     assert config.ai.provider is AIProvider.openrouter
@@ -155,7 +155,7 @@ def test_ai_invalid_provider(tmp_path):
         """\
         [ai]
         provider = "bogus"
-    """,
+        """,
     )
     with pytest.raises(ValidationError):
         load_config(p)
@@ -167,7 +167,7 @@ def test_ai_extra_field_rejected(tmp_path):
         """\
         [ai]
         typo_field = true
-    """,
+        """,
     )
     with pytest.raises(ValidationError):
         load_config(p)
@@ -180,7 +180,7 @@ def test_ai_resolve_token_prefers_config(tmp_path, monkeypatch):
         """\
         [ai]
         github_token = "cfg_token"
-    """,
+        """,
     )
     config = load_config(p)
     assert config.ai.resolve_token() == "cfg_token"
@@ -210,7 +210,7 @@ def test_ai_require_configured_openrouter_missing(tmp_path, monkeypatch):
         """\
         [ai]
         provider = "openrouter"
-    """,
+        """,
     )
     config = load_config(p)
     with pytest.raises(AIConfigError, match="OpenRouter"):
