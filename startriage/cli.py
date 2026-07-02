@@ -455,25 +455,22 @@ def _emit_ai_report(report: str, markdown_path: Path | None) -> None:
         append_report(markdown_path, report)
         print(f"AI triage appended to {markdown_path}")
     else:
-        path = write_report(report)
+        path = write_report(report, report_dir=report_dir)
         print(f"AI triage report written to {path}")
 
 
 async def _run_ai_triage(args: argparse.Namespace, config: StarTriageConfig) -> None:
-    from .ai import gather_user_bug_payloads, run_agent_on_payloads
+    from .ai import run_ai_over_bug_specs
 
     provider = _build_ai_provider(config)
     if provider is None:
         return
 
-    payloads = await asyncio.to_thread(gather_user_bug_payloads, args.bug)
-    if not payloads:
+    report = await run_ai_over_bug_specs(config, args.bug, provider=provider)
+    if report is None:
         print("No valid bugs to triage.", file=sys.stderr)
         return
-
-    report = await run_agent_on_payloads(config, payloads, provider=provider)
-    if report is not None:
-        print(report)
+    print(report)
 
 
 async def _set_config_settings(args: argparse.Namespace, _config: StarTriageConfig) -> None:
@@ -497,15 +494,15 @@ async def _set_config_settings(args: argparse.Namespace, _config: StarTriageConf
         updates.setdefault("general", {})["proposed_min_age"] = args.proposed_min_age
     if args.github_token is not None:
         updates.setdefault("general", {})["github_token"] = args.github_token
-    if args.ai_provider:
+    if args.ai_provider is not None:
         updates.setdefault("ai", {})["provider"] = str(args.ai_provider)
-    if args.ai_model:
+    if args.ai_model is not None:
         updates.setdefault("ai", {})["model"] = args.ai_model
     if args.ai_github_token is not None:
         updates.setdefault("ai", {})["github_token"] = args.ai_github_token
     if args.ai_openrouter_key is not None:
         updates.setdefault("ai", {})["openrouter_api_key"] = args.ai_openrouter_key
-    if args.ai_openrouter_base_url:
+    if args.ai_openrouter_base_url is not None:
         updates.setdefault("ai", {})["openrouter_base_url"] = args.ai_openrouter_base_url
 
     if not updates:
