@@ -45,11 +45,14 @@ def build_client_kwargs(ai_config: AIConfig) -> dict[str, Any]:
     auth is needed. The token is resolved with config-over-env precedence via
     :meth:`AIConfig.resolve_token`.
     """
-    if ai_config.provider is AIProvider.copilot:
-        token = ai_config.resolve_token()
-        if token:
-            return {"github_token": token}
-    return {}
+    match ai_config.provider:
+        case AIProvider.copilot:
+            token = ai_config.resolve_token()
+            if token:
+                return {"github_token": token}
+            return {}
+        case _:
+            return {}
 
 
 def build_session_kwargs(ai_config: AIConfig) -> dict[str, Any]:
@@ -58,15 +61,17 @@ def build_session_kwargs(ai_config: AIConfig) -> dict[str, Any]:
     Only OpenRouter (BYOK) contributes here, as an OpenAI-compatible ``provider``
     block; the Copilot provider authenticates at the client level instead.
     """
-    if ai_config.provider is AIProvider.openrouter:
-        return {
-            "provider": {
-                "type": "openai",
-                "base_url": ai_config.openrouter_base_url,
-                "api_key": ai_config.resolve_token(),
+    match ai_config.provider:
+        case AIProvider.openrouter:
+            return {
+                "provider": {
+                    "type": "openai",
+                    "base_url": ai_config.openrouter_base_url,
+                    "api_key": ai_config.resolve_token(),
+                }
             }
-        }
-    return {}
+        case _:
+            return {}
 
 
 def _log_session_event(event: Any) -> None:
