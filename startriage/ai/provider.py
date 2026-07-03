@@ -151,9 +151,11 @@ class FakeProvider(Provider):
 def build_provider(ai_config: AIConfig) -> Provider:
     """Return a ready provider for ``ai_config``, validating credentials first.
 
-    Raises :class:`AIConfigError` (via :meth:`AIConfig.require_configured`) when the
-    active provider has no usable credential, so callers fail smoothly before any
-    session is started.
+    The credential check lives on :class:`AIConfig` as a context-gated model
+    validator; re-validating here with ``require_ai`` context runs it at the AI
+    entry point, raising :class:`~startriage.config.AIConfigError` when the active
+    provider has no usable credential (from config or env) so misconfig fails
+    before any session is started.
     """
-    ai_config.require_configured()
+    AIConfig.model_validate(ai_config.model_dump(), context={"require_ai": True})
     return CopilotProvider(ai_config)

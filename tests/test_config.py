@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from startriage.config import AIConfigError, load_config, update_user_config
+from startriage.config import AIConfig, AIConfigError, load_config, update_user_config
 from startriage.enums import AIProvider
 
 
@@ -194,15 +194,15 @@ def test_ai_resolve_token_from_env(tmp_path, monkeypatch):
     assert config.ai.resolve_token() == "env_token"
 
 
-def test_ai_require_configured_copilot_missing(tmp_path, monkeypatch):
+def test_ai_check_token_copilot_missing(tmp_path, monkeypatch):
     for var in ("COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"):
         monkeypatch.delenv(var, raising=False)
     config = load_config(tmp_path / "nonexistent.toml")
     with pytest.raises(AIConfigError, match="Copilot"):
-        config.ai.require_configured()
+        AIConfig.model_validate(config.ai.model_dump(), context={"require_ai": True})
 
 
-def test_ai_require_configured_openrouter_missing(tmp_path, monkeypatch):
+def test_ai_check_token_openrouter_missing(tmp_path, monkeypatch):
     for var in ("STARTRIAGE_AI_OPENROUTER_KEY", "OPENROUTER_API_KEY"):
         monkeypatch.delenv(var, raising=False)
     p = _write_toml(
@@ -214,7 +214,16 @@ def test_ai_require_configured_openrouter_missing(tmp_path, monkeypatch):
     )
     config = load_config(p)
     with pytest.raises(AIConfigError, match="OpenRouter"):
-        config.ai.require_configured()
+        AIConfig.model_validate(config.ai.model_dump(), context={"require_ai": True})
+
+
+def test_ai_check_token_skipped_without_context(tmp_path, monkeypatch):
+    # Non-AI commands validate AIConfig on every load; without the require_ai
+    # context the missing-credential check must not fire.
+    for var in ("COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"):
+        monkeypatch.delenv(var, raising=False)
+    config = load_config(tmp_path / "nonexistent.toml")
+    assert config.ai.resolve_token() is None
 
 
 def test_ai_secret_written_with_restricted_perms(tmp_path):

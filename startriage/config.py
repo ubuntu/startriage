@@ -7,9 +7,10 @@ import tomllib
 from importlib.resources import files
 from importlib.resources.abc import Traversable
 from pathlib import Path
+from typing import Self
 
 import tomli_w
-from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, ValidationInfo, field_validator, model_validator
 
 from .enums import AIProvider, UpdateFilter
 
@@ -62,21 +63,36 @@ class AIConfig(BaseModel):
             return self.github_token or _first_env(COPILOT_TOKEN_ENV_VARS)
         return self.openrouter_api_key or _first_env(OPENROUTER_KEY_ENV_VARS)
 
-    def require_configured(self) -> None:
-        """Raise AIConfigError with a friendly hint when no credential is available."""
-        if self.resolve_token():
-            return
-        if self.provider is AIProvider.copilot:
-            raise AIConfigError(
-                "No Copilot credential configured. Run "
-                "'startriage config set --ai-github-token <token>' or set the "
-                "COPILOT_GITHUB_TOKEN environment variable."
-            )
-        raise AIConfigError(
-            "No OpenRouter API key configured. Run "
-            "'startriage config set --ai-openrouter-key <key>' or set the "
-            "OPENROUTER_API_KEY environment variable."
-        )
+    @model_validator(mode="after")
+    def check_token(self, info: ValidationInfo) -> Self:
+        """Validate that a usable credential exists — but only when AI is requested.
+
+        The ``[ai]`` section is optional so non-AI commands (plain ``triage``,
+        ``todo``) run without any credential. Ordinary ``load_config`` validation
+        therefore skips this check; the AI entry point re-validates with
+        ``context={"require_ai": True}`` so a misconfigured provider fails before a
+        session starts. Raises :class:`AIConfigError` (propagated unwrapped by
+        pydantic, as it is not a ``ValueError``) with a friendly hint.
+        """
+        if not (info.context and info.context.get("require_ai")):
+            return self
+        if self.resolve_token() is not None:
+            return self
+        match self.provider:
+            case AIProvider.copilot:
+                raise AIConfigError(
+                    "No Copilot credential configured. Run "
+                    "'startriage config set --ai-github-token <token>' or set the "
+                    "COPILOT_GITHUB_TOKEN environment variable."
+                )
+            case AIProvider.openrouter:
+                raise AIConfigError(
+                    "No OpenRouter API key configured. Run "
+                    "'startriage config set --ai-openrouter-key <key>' or set the "
+                    "OPENROUTER_API_KEY environment variable."
+                )
+            case _:
+                raise RuntimeError("unhandled provider")
 
 
 class GeneralConfig(BaseModel):
