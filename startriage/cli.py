@@ -7,11 +7,9 @@ import asyncio
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from .config import (
     DEFAULT_USER_CONFIG,
-    AIConfigError,
     StarTriageConfig,
     load_config,
     resolve_team_name,
@@ -25,9 +23,6 @@ from .savebugs import BugPersistor, SaveConfig
 from .source import TaskFilterOptions
 from .sources.github.auth import _run_github_login
 from .triage import SOURCES, resolve_sources, run_todo, run_triage
-
-if TYPE_CHECKING:
-    from .ai import Provider
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -365,11 +360,12 @@ async def _run_triage(args: argparse.Namespace, config: StarTriageConfig) -> Non
     provider = None
     output_cfg = _outputcfg_from_args(args)
     if args.ai:
-        # Validate AI credentials up-front so a misconfig fails before the (slow)
-        # normal triage run rather than after it.
-        provider = _build_ai_provider(config)
-        if provider is None:
-            return
+        # Build the provider up-front so a misconfigured [ai] section fails
+        # before the (slow) normal triage run rather than after it. A missing
+        # credential raises AIConfigError, which propagates to the top.
+        from .ai import build_provider
+
+        provider = build_provider(config.ai)
 
     filter = _filter_from_args(config, args)
     team = config.get_team(filter.team)
@@ -390,11 +386,11 @@ async def _run_triage(args: argparse.Namespace, config: StarTriageConfig) -> Non
     results = await run_triage(config, filter, output_cfg)
 
     if args.ai:
-        from .ai import run_ai_over_triage_results
+        from .ai import emit_ai_report, run_ai_over_triage_results
 
         report = await run_ai_over_triage_results(config, results, provider=provider)
         if report is not None:
-            _emit_ai_report(report, output_cfg.markdown_path)
+            emit_ai_report(report, output_cfg.markdown_path)
 
 
 async def _run_todo(args: argparse.Namespace, config: StarTriageConfig) -> None:
@@ -420,35 +416,6 @@ async def _run_todo(args: argparse.Namespace, config: StarTriageConfig) -> None:
     )
 
 
-def _build_ai_provider(config: StarTriageConfig) -> Provider | None:
-    """Build the AI provider, printing a friendly hint and returning None on misconfig."""
-    from .ai import build_provider
-
-    try:
-        return build_provider(config.ai)
-    except AIConfigError as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return None
-
-
-def _emit_ai_report(report: str, markdown_path: Path | None) -> None:
-    """Emit an AI ``report`` for a ``triage --ai`` run.
-
-    With ``--markdown`` the AI section is appended (behind a review notice) to
-    that same file, so the human triage report and the AI aid live in one
-    cohesive document. Without ``--markdown`` the report is printed to stdout,
-    together with the normal triage output that already went there.
-    """
-    from .ai import append_report
-    from .ai.render import AI_APPEND_NOTICE
-
-    if markdown_path is not None:
-        append_report(markdown_path, report)
-        print(f"AI triage appended to {markdown_path}")
-    else:
-        print("\n" + AI_APPEND_NOTICE + report)
-
-
 async def _run_analyze(args: argparse.Namespace, config: StarTriageConfig) -> None:
     if not args.ai:
         from .ai import describe_bug_specs
@@ -460,12 +427,9 @@ async def _run_analyze(args: argparse.Namespace, config: StarTriageConfig) -> No
         print(report)
         return
 
-    from .ai import run_ai_over_bug_specs
+    from .ai import build_provider, run_ai_over_bug_specs
 
-    provider = _build_ai_provider(config)
-    if provider is None:
-        return
-
+    provider = build_provider(config.ai)
     report = await run_ai_over_bug_specs(config, args.bug, provider=provider)
     if report is None:
         print("No valid bugs to triage.", file=sys.stderr)

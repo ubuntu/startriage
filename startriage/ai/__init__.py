@@ -20,6 +20,7 @@ from .provider import (
 )
 from .render import (
     append_report,
+    emit_ai_report,
     render_bug_metadata,
     render_report,
 )
@@ -46,6 +47,7 @@ __all__ = [
     "build_provider",
     "build_session_kwargs",
     "describe_bug_specs",
+    "emit_ai_report",
     "extract_json_block",
     "gather_user_bug_payloads",
     "load_system_prompt",

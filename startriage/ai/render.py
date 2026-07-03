@@ -188,3 +188,18 @@ def append_report(path: Path, content: str) -> Path:
     with path.open("a", encoding="utf-8") as fh:
         fh.write("\n\n" + AI_APPEND_NOTICE + content)
     return path
+
+
+def emit_ai_report(report: str, markdown_path: Path | None) -> None:
+    """Emit an AI ``report`` for a ``triage --ai`` run.
+
+    With ``--markdown`` the AI section is appended (behind :data:`AI_APPEND_NOTICE`)
+    to that same file, so the human triage report and the AI aid live in one
+    cohesive document. Without ``--markdown`` the report is printed to stdout,
+    together with the normal triage output that already went there.
+    """
+    if markdown_path is not None:
+        append_report(markdown_path, report)
+        print(f"AI triage appended to {markdown_path}")
+    else:
+        print("\n" + AI_APPEND_NOTICE + report)
