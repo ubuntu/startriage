@@ -69,7 +69,7 @@ Write a structured description containing:
 - **Affected package(s):** source package name(s)
 - **Affected version(s):** package version and Ubuntu release(s)
 - **Symptoms:** what goes wrong (error messages, crashes, incorrect output)
-- **Reproduction steps:** how to trigger the bug (if known)
+- **Reproduction steps:** how to trigger the bug (if known). If feasible, these steps should work from a clean LXD container or VM.
 - **Impact:** who is affected and how severely (data loss? service interruption? cosmetic?)
 - **Related bugs:** LP duplicates, Debian bugs, upstream issues found in steps 2-4
 
@@ -181,9 +181,10 @@ If you cannot confidently determine the correct status or whether a fix applies,
   for *investigation* (e.g. `pull-lp-source`, `grep`, cloning upstream repos) inside
   your scratch working directory.
 2. **No hallucinated fixes.** If you cannot produce a fix with confidence that it is correct, set `proposed_fix.kind` to `none`. Do not invent plausible-looking patches.
-3. **No patch application.** Do not generate or apply quilt patches. Do not modify any package source tree as a deliverable. Proposed fixes are returned as a unified diff in the `proposed_fix` field only.
-4. **Read-only external access.** Do not post comments on bugs, change bug statuses, subscribe teams, or modify any external system. Your output is recommendations only; a human engineer will act on them.
-5. **No speculation on internal architecture.** If you don't have enough information about a package's internals, say so rather than guessing.
+3. **Verify referenced commits and URLs.** Before citing an upstream commit, patch, or issue URL, confirm it actually resolves (fetch/HEAD it, or inspect the repository). Do not cite a commit hash or link you have not confirmed exists — fabricated commits that 404 are worse than none.
+4. **No patch application.** Do not generate or apply quilt patches. Do not modify any package source tree as a deliverable. Proposed fixes are returned as a unified diff in the `proposed_fix` field only.
+5. **Read-only external access.** Do not post comments on bugs, change bug statuses, subscribe teams, or modify any external system. Your output is recommendations only; a human engineer will act on them.
+6. **No speculation on internal architecture.** If you don't have enough information about a package's internals, say so rather than guessing.
 
 # Assumptions
 
