@@ -12,6 +12,7 @@ from startriage.ai import (
 )
 from startriage.cli import _build_parser
 from startriage.config import StarTriageConfig
+from startriage.enums import AIPermission
 
 _CANNED = """Here is my analysis.
 
@@ -139,14 +140,32 @@ def test_parser_analyze_accepts_multiple_bugs():
     args = _build_parser().parse_args(["analyze", "123", "#456", "https://x/+bug/789"])
     assert args.bug == ["123", "#456", "https://x/+bug/789"]
     assert args.func.__name__ == "_run_analyze"
-    assert args.ai is False
+    assert args.ai is None
 
 
 def test_parser_analyze_ai_flag():
-    assert _build_parser().parse_args(["analyze", "123"]).ai is False
-    assert _build_parser().parse_args(["analyze", "--ai", "123"]).ai is True
+    # No --ai -> off; --ai requires an explicit level; a bug number is not a level.
+    assert _build_parser().parse_args(["analyze", "123"]).ai is None
+    assert _build_parser().parse_args(["analyze", "--ai", "full", "123"]).ai is AIPermission.full
+    assert _build_parser().parse_args(["analyze", "--ai", "ask", "123"]).ai is AIPermission.ask
+    args = _build_parser().parse_args(["analyze", "--ai", "restricted", "123"])
+    assert args.ai is AIPermission.restricted
+    assert args.bug == ["123"]
 
 
-def test_parser_triage_ai_flag_defaults_false():
-    assert _build_parser().parse_args(["triage"]).ai is False
-    assert _build_parser().parse_args(["triage", "--ai"]).ai is True
+def test_parser_triage_ai_flag_defaults_none():
+    assert _build_parser().parse_args(["triage"]).ai is None
+    assert _build_parser().parse_args(["triage", "--ai", "restricted"]).ai is AIPermission.restricted
+    assert _build_parser().parse_args(["triage", "--ai", "full"]).ai is AIPermission.full
+
+
+def test_parser_ai_flag_requires_a_level():
+    with pytest.raises(SystemExit):
+        _build_parser().parse_args(["triage", "--ai"])
+
+
+def test_parser_ai_flag_rejects_unknown_level():
+    with pytest.raises(SystemExit):
+        _build_parser().parse_args(["triage", "--ai", "bogus"])
+    with pytest.raises(SystemExit):
+        _build_parser().parse_args(["analyze", "--ai", "123"])

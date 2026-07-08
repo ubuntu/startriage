@@ -16,7 +16,7 @@ from .config import (
     update_user_config,
 )
 from .dates import parse_interval, triage_task_date_range
-from .enums import AIProvider, UpdateFilter
+from .enums import AIPermission, AIProvider, UpdateFilter
 from .log import log_setup
 from .output import OutputConfig, OutputFormat
 from .savebugs import BugPersistor, SaveConfig
@@ -114,6 +114,22 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     taskfilter_p.add_argument("--no-ignore-list", action="store_true", help="Include ignored ubuntu packages")
 
+    # Shared parent parser for commands that can run the AI agent.
+    ai_p = argparse.ArgumentParser(add_help=False)
+    ai_p.add_argument(
+        "--ai",
+        type=AIPermission,
+        choices=list(AIPermission),
+        default=None,
+        metavar="LEVEL",
+        help=(
+            "Also run AI triage, granting the agent this permission level (required): "
+            "restricted (no tool execution), "
+            "full (auto-approve every shell/file/web tool), or "
+            "ask (prompt on the terminal before each tool call)"
+        ),
+    )
+
     list_p = argparse.ArgumentParser(
         add_help=False,
         epilog="""\
@@ -141,7 +157,7 @@ GREEN = done
     triage_p = sp.add_parser(
         "triage",
         help="Daily triage",
-        parents=[output_p, taskfilter_p, list_p],
+        parents=[output_p, taskfilter_p, list_p, ai_p],
     )
     triage_p.add_argument("--no-expiration", action="store_true", help="Skip expiring bugs subsection")
     triage_p.add_argument(
@@ -173,14 +189,6 @@ GREEN = done
         metavar="DAYS",
         help="Minimum days of being stuck in proposed to be included in triage",
     )
-    triage_p.add_argument(
-        "--ai",
-        action="store_true",
-        help=(
-            "Also run AI triage on every bug found. The AI section is printed after the "
-            "normal output, or with --markdown folded into that single report file"
-        ),
-    )
     triage_p.set_defaults(func=_run_triage)
 
     # --- todo ---
@@ -201,17 +209,13 @@ GREEN = done
     analyze_p = sp.add_parser(
         "analyze",
         help="Show metadata for one or more Launchpad bugs (add --ai to run the agent)",
+        parents=[ai_p],
     )
     analyze_p.add_argument(
         "bug",
         nargs="+",
         metavar="BUG",
         help="Launchpad bug to analyze: full URL, NNNNNN, or #NNNNNN",
-    )
-    analyze_p.add_argument(
-        "--ai",
-        action="store_true",
-        help="Run the AI agent over the bug(s) and write a report instead of just showing metadata",
     )
     analyze_p.set_defaults(func=_run_analyze)
 
@@ -359,13 +363,13 @@ async def _run() -> None:
 async def _run_triage(args: argparse.Namespace, config: StarTriageConfig) -> None:
     provider = None
     output_cfg = _outputcfg_from_args(args)
-    if args.ai:
+    if args.ai is not None:
         # Build the provider up-front so a misconfigured [ai] section fails
         # before the (slow) normal triage run rather than after it. A missing
         # credential raises AIConfigError, which propagates to the top.
         from .ai import build_provider
 
-        provider = build_provider(config.ai)
+        provider = build_provider(config.ai, args.ai)
 
     filter = _filter_from_args(config, args)
     team = config.get_team(filter.team)
@@ -385,7 +389,7 @@ async def _run_triage(args: argparse.Namespace, config: StarTriageConfig) -> Non
 
     results = await run_triage(config, filter, output_cfg)
 
-    if args.ai:
+    if args.ai is not None:
         from .ai import emit_ai_report, run_ai_over_triage_results
 
         report = await run_ai_over_triage_results(config, results, provider=provider)
@@ -417,7 +421,7 @@ async def _run_todo(args: argparse.Namespace, config: StarTriageConfig) -> None:
 
 
 async def _run_analyze(args: argparse.Namespace, config: StarTriageConfig) -> None:
-    if not args.ai:
+    if args.ai is None:
         from .ai import describe_bug_specs
 
         report = await describe_bug_specs(args.bug)
@@ -429,7 +433,7 @@ async def _run_analyze(args: argparse.Namespace, config: StarTriageConfig) -> No
 
     from .ai import build_provider, run_ai_over_bug_specs
 
-    provider = build_provider(config.ai)
+    provider = build_provider(config.ai, args.ai)
     report = await run_ai_over_bug_specs(config, args.bug, provider=provider)
     if report is None:
         print("No valid bugs to triage.", file=sys.stderr)

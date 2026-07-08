@@ -28,6 +28,14 @@ class AIProvider(StrEnum):
     openrouter = "openrouter"  # OpenAI-compatible BYOK endpoint
 
 
+class AIPermission(StrEnum):
+    """How much the triage agent is allowed to execute on the host."""
+
+    restricted = "restricted"  # no tool execution; reason over the provided metadata only
+    full = "full"  # auto-approve every tool call (shell, file, web)
+    ask = "ask"  # prompt on the terminal before each tool call
+
+
 class TriageStatus(StrEnum):
     """Status the agent recommends for a triaged bug."""
 
