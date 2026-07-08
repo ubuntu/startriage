@@ -15,6 +15,7 @@ from .provider import (
     FakeProvider,
     Provider,
     build_client_kwargs,
+    build_permission_handler,
     build_provider,
     build_session_kwargs,
 )
@@ -44,6 +45,7 @@ __all__ = [
     "Provider",
     "append_report",
     "build_client_kwargs",
+    "build_permission_handler",
     "build_provider",
     "build_session_kwargs",
     "describe_bug_specs",

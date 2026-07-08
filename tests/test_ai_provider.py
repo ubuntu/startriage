@@ -8,11 +8,12 @@ from startriage.ai import (
     CopilotProvider,
     FakeProvider,
     build_client_kwargs,
+    build_permission_handler,
     build_provider,
     build_session_kwargs,
 )
 from startriage.config import AIConfig, AIConfigError
-from startriage.enums import AIProvider
+from startriage.enums import AIPermission, AIProvider
 
 
 @pytest.fixture(autouse=True)
@@ -73,7 +74,7 @@ def test_build_session_kwargs_openrouter_custom_base_url():
 
 
 def test_build_provider_returns_copilot_provider():
-    provider = build_provider(AIConfig(github_token="github_pat_abc"))
+    provider = build_provider(AIConfig(github_token="github_pat_abc"), AIPermission.restricted)
     assert isinstance(provider, CopilotProvider)
     assert provider.model == "claude-opus-4.8"
 
@@ -84,17 +85,37 @@ def test_build_provider_openrouter_uses_configured_model():
         model="anthropic/claude-3.5",
         openrouter_api_key="sk-or-1",
     )
-    assert build_provider(cfg).model == "anthropic/claude-3.5"
+    assert build_provider(cfg, AIPermission.restricted).model == "anthropic/claude-3.5"
+
+
+def test_build_provider_threads_permission():
+    provider = build_provider(AIConfig(github_token="github_pat_abc"), AIPermission.full)
+    assert isinstance(provider, CopilotProvider)
+    assert provider._permission is AIPermission.full
 
 
 def test_build_provider_missing_copilot_credential():
     with pytest.raises(AIConfigError, match="Copilot"):
-        build_provider(AIConfig())
+        build_provider(AIConfig(), AIPermission.restricted)
 
 
 def test_build_provider_missing_openrouter_credential():
     with pytest.raises(AIConfigError, match="OpenRouter"):
-        build_provider(AIConfig(provider=AIProvider.openrouter))
+        build_provider(AIConfig(provider=AIProvider.openrouter), AIPermission.restricted)
+
+
+def test_build_permission_handler_full_approves_all():
+    pytest.importorskip("copilot")
+    from copilot.session import PermissionHandler  # ty: ignore[unresolved-import]
+
+    assert build_permission_handler(AIPermission.full) is PermissionHandler.approve_all
+
+
+def test_build_permission_handler_restricted_and_ask_are_callables():
+    pytest.importorskip("copilot")
+
+    assert callable(build_permission_handler(AIPermission.restricted))
+    assert callable(build_permission_handler(AIPermission.ask))
 
 
 @pytest.mark.asyncio

@@ -23,6 +23,7 @@ import re
 from typing import TYPE_CHECKING, Any
 
 from ..config import StarTriageConfig
+from ..enums import AIPermission
 from ..spinner import Spinner
 from .agent import load_system_prompt, triage_bugs
 from .provider import Provider, build_provider
@@ -124,15 +125,16 @@ async def run_agent_on_payloads(
     Returns the markdown string, or ``None`` when there is nothing to triage.
     Emitting the report (printing it or folding it into a triage markdown file)
     is left to the caller. When ``provider`` is omitted it is built from
-    ``config`` (validating credentials, which may raise
-    :class:`~startriage.config.AIConfigError`).
+    ``config`` in the safe ``restricted`` permission level (validating
+    credentials, which may raise :class:`~startriage.config.AIConfigError`); the
+    CLI always passes an explicit provider carrying the user's ``--ai`` level.
     """
     if not payloads:
         logger.info("No bugs to triage with the AI agent.")
         return None
 
     if provider is None:
-        provider = build_provider(config.ai)
+        provider = build_provider(config.ai, AIPermission.restricted)
 
     system_prompt = load_system_prompt()
     spinner = _make_spinner(len(payloads))

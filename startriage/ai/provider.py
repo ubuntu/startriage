@@ -14,14 +14,25 @@ The only thing that differs between providers is *where* the credential goes:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from abc import ABC, abstractmethod
 from typing import Any
 
 from ..config import AIConfig
-from ..enums import AIProvider
+from ..enums import AIPermission, AIProvider
 
 logger = logging.getLogger(__name__)
+
+# Appended to the system prompt in restricted mode, where every tool call is
+# rejected. Without it the agent would keep trying to run commands and only
+# discover they are denied one failure at a time.
+RESTRICTED_PROMPT_NOTE = (
+    "\n\nTool execution is disabled for this run. Reason only over the bug metadata "
+    "provided in the user message; do not attempt to run shell commands, read or write "
+    "files, or fetch URLs. If a step would require executing a tool, say so and explain "
+    "what you would have done instead of trying."
+)
 
 
 class Provider(ABC):
@@ -85,25 +96,30 @@ class CopilotProvider(Provider):
 
     The SDK (and the Node Copilot CLI it spawns) is imported only when a session is
     actually run, so non-AI commands and offline tests never need it installed.
-    All tools are auto-approved so unattended runs never block on a prompt; the
-    safety boundary is snap confinement plus a dedicated scratch dir, not an
-    allow-list.
+    The ``permission`` level decides how tool calls are handled: ``restricted``
+    rejects every tool (text-only reasoning), ``full`` auto-approves them, and
+    ``ask`` prompts on the terminal before each call.
     """
 
-    def __init__(self, ai_config: AIConfig) -> None:
+    def __init__(self, ai_config: AIConfig, permission: AIPermission) -> None:
         self._ai_config = ai_config
+        self._permission = permission
         self.model = ai_config.model
 
     async def run(self, system_prompt: str, user_message: str) -> str:
         # Lazy import keeps the SDK (and the Node CLI it spawns) optional; it is
         # bundled by the snap rather than declared as a hard Python dependency.
         from copilot import CopilotClient  # ty: ignore[unresolved-import]
-        from copilot.session import PermissionHandler  # ty: ignore[unresolved-import]
 
-        logger.debug("Starting Copilot session (model=%s)", self.model)
+        if self._permission is AIPermission.restricted:
+            system_prompt += RESTRICTED_PROMPT_NOTE
+
+        logger.debug(
+            "Starting Copilot session (model=%s, permission=%s)", self.model, self._permission
+        )
         async with CopilotClient(**build_client_kwargs(self._ai_config)) as client:
             async with await client.create_session(
-                on_permission_request=PermissionHandler.approve_all,
+                on_permission_request=build_permission_handler(self._permission),
                 model=self.model,
                 # "append" keeps the CLI's tool-use foundation and layers our
                 # behavioural prompt on top ("replace" would drop its guardrails).
@@ -148,14 +164,55 @@ class FakeProvider(Provider):
         return self._default_response
 
 
-def build_provider(ai_config: AIConfig) -> Provider:
+def build_permission_handler(permission: AIPermission) -> Any:
+    """Return the Copilot ``on_permission_request`` handler for ``permission``.
+
+    - ``full`` auto-approves every tool call (:meth:`PermissionHandler.approve_all`).
+    - ``restricted`` rejects every tool call, so the agent can only reason over the
+      metadata it was given.
+    - ``ask`` prompts on the terminal and approves or rejects each call.
+
+    The Copilot SDK is imported lazily so non-AI commands and offline tests never
+    need it installed. Passing ``None`` (the SDK's "leave pending" mode) is
+    deliberately avoided: our runs drive the session with ``send_and_wait`` and do
+    not resolve pending permission RPCs, so an unanswered request would hang.
+    """
+    from copilot.rpc import (  # ty: ignore[unresolved-import]
+        PermissionDecisionApproveOnce,
+        PermissionDecisionReject,
+    )
+    from copilot.session import PermissionHandler  # ty: ignore[unresolved-import]
+
+    match permission:
+        case AIPermission.full:
+            return PermissionHandler.approve_all
+        case AIPermission.restricted:
+            def reject(request: Any, invocation: Any) -> Any:
+                return PermissionDecisionReject(feedback="Tool execution is disabled for this run.")
+
+            return reject
+        case AIPermission.ask:
+            async def ask(request: Any, invocation: Any) -> Any:
+                summary = getattr(request, "full_command_text", None) or type(request).__name__
+                answer = await asyncio.to_thread(input, f"Allow the agent to run: {summary}? [y/N] ")
+                if answer.strip().lower() in ("y", "yes"):
+                    return PermissionDecisionApproveOnce()
+                return PermissionDecisionReject(feedback="User denied this action.")
+
+            return ask
+        case _:
+            raise RuntimeError("unhandled permission")
+
+
+def build_provider(ai_config: AIConfig, permission: AIPermission) -> Provider:
     """Return a ready provider for ``ai_config``, validating credentials first.
 
     The credential check lives on :class:`AIConfig` as a context-gated model
     validator; re-validating here with ``require_ai`` context runs it at the AI
     entry point, raising :class:`~startriage.config.AIConfigError` when the active
     provider has no usable credential (from config or env) so misconfig fails
-    before any session is started.
+    before any session is started. ``permission`` decides how the agent's tool
+    calls are handled at run time (see :func:`build_permission_handler`).
     """
     AIConfig.model_validate(ai_config.model_dump(), context={"require_ai": True})
-    return CopilotProvider(ai_config)
+    return CopilotProvider(ai_config, permission)
