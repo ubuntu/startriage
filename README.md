@@ -62,16 +62,33 @@ required. Add `--ai` to run the agent, which produces a suggested status, tags,
 analysis, and (where applicable) a proposed fix. The agent never edits bugs and
 never applies patches — it only prints its analysis.
 
+`--ai` requires a permission level that controls what the agent may run:
+
+- `restricted` — no tool execution; the agent reasons only over the bug metadata
+  it was handed.
+- `full` — auto-approve every shell/file/web tool the agent requests. This lets
+  it pull source, run `debdiff`, fetch upstream, etc., but it executes arbitrary
+  commands on your host: only use it in a container or throwaway environment.
+- `ask` — the agent runs tools, but you are prompted on the terminal to approve
+  or deny each call.
+
 ```bash
 # Show metadata for one or more specific bugs (URL, NNNNNN, or #NNNNNN)
 startriage analyze 2101234 '#2105678'
 
-# Run the AI agent over those bugs instead of just showing metadata
-startriage analyze --ai 2101234 '#2105678'
+# Run the AI agent over those bugs, text-only reasoning (restricted)
+startriage analyze --ai restricted 2101234 '#2105678'
 
-# Run the normal daily triage, then AI-triage every bug found
-startriage triage --ai
+# Let the agent run tools, approving each one interactively
+startriage analyze --ai ask 2101234
+
+# Run the normal daily triage, then AI-triage every bug found (auto-approve tools)
+startriage triage --ai full
 ```
+
+> Warning: `--ai full` auto-approves tool execution with no confirmation. Run it
+> only inside a container or otherwise isolated environment. Containerized agent
+> execution is planned as future work (see issue #4).
 
 The AI output is printed after the normal triage results. With `--markdown FILE`
 the AI section is folded into that same report file (behind a clear "review
