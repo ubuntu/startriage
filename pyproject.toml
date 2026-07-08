@@ -20,6 +20,11 @@ dependencies = [
     "platformdirs",
 ]
 
+[project.optional-dependencies]
+# Agentic AI triage. The SDK bundles the Copilot CLI runtime it spawns; kept
+# optional so non-AI installs stay lean. The snap ships it (see snapcraft.yaml).
+ai = ["github-copilot-sdk"]
+
 [project.scripts]
 startriage = "startriage.__main__:main"
 
@@ -35,7 +40,7 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 packages = {find = {where = ["."]}}
-package-data = {"startriage" = ["data/*.toml"]}
+package-data = {"startriage" = ["data/*.toml", "data/*.md"]}
 
 [tool.setuptools_scm]
 version_scheme = "only-version"

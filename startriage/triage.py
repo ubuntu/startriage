@@ -49,8 +49,12 @@ async def run_triage(
     config: StarTriageConfig,
     opts: TaskFilterOptions,
     output_cfg: OutputConfig,
-) -> None:
-    """Daily triage: fetch all sources concurrently, print sections in order as they complete."""
+) -> list[tuple[str, TriageResult]]:
+    """Daily triage: fetch all sources concurrently, print sections in order as they complete.
+
+    Returns the ``(source_name, result)`` pairs that were fetched successfully so
+    callers (e.g. ``triage --ai``) can reuse them without re-fetching.
+    """
 
     range = triage_task_note = ""
 
@@ -121,6 +125,8 @@ async def run_triage(
             fh.write(buf.getvalue())
 
         logging.info("Markdown written to %s", output_cfg.markdown_path)
+
+    return results
 
 
 async def run_todo(
