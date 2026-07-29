@@ -40,6 +40,9 @@ github_repos = [
     "canonical/containerd-app",
     "canonical/runc-app",
     "canonical/runc-stable",
+    "canonical/ubuntu-debuginfod-operator",
+    "canonical/ubuntu-static-reports-operator",
+    "canonical/git-ubuntu-operator",
 ]
 github_todo_labels = ["server-todo"]
 proposed_migration_teams = ["ubuntu-server"]
