@@ -164,6 +164,8 @@ GREEN = done
         "triage",
         help="Daily triage",
         parents=[output_p, taskfilter_p, list_p, ai_p],
+        epilog=list_p.epilog,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     triage_p.add_argument("--no-expiration", action="store_true", help="Skip expiring bugs subsection")
     triage_p.add_argument(
@@ -198,7 +200,13 @@ GREEN = done
     triage_p.set_defaults(func=_run_triage)
 
     # --- todo ---
-    todo_p = sp.add_parser("todo", help="Tagged bug housekeeping", parents=[output_p, taskfilter_p, list_p])
+    todo_p = sp.add_parser(
+        "todo",
+        help="Tagged bug housekeeping",
+        parents=[output_p, taskfilter_p, list_p],
+        epilog=list_p.epilog,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     todo_p.add_argument(
         "--subscribed",
         action="store_true",
