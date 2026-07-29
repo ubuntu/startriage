@@ -137,6 +137,7 @@ async def test_triage_bugs_success():
     outcome = outcomes[0]
     assert outcome.ok
     assert outcome.bug == "123"
+    assert outcome.result is not None
     assert outcome.result.status is TriageStatus.triaged
     assert outcome.error is None
     # The payload is forwarded as a JSON user message under the given system prompt.
@@ -154,10 +155,12 @@ async def test_triage_bugs_skips_and_continues_on_failure():
     assert len(outcomes) == 2
     assert not outcomes[0].ok
     assert outcomes[0].bug == "123"
+    assert outcomes[0].error is not None
     assert "no fenced code block" in outcomes[0].error
     assert outcomes[0].raw == "no json here"
 
     assert outcomes[1].ok
+    assert outcomes[1].result is not None
     assert outcomes[1].result.bug == "456"
 
 
@@ -172,5 +175,6 @@ async def test_triage_bugs_records_provider_exception():
     assert len(outcomes) == 1
     assert not outcomes[0].ok
     assert outcomes[0].bug == "789"
+    assert outcomes[0].error is not None
     assert "provider error" in outcomes[0].error
     assert "network down" in outcomes[0].error

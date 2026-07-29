@@ -84,13 +84,13 @@ class _FakeTask:
 
 def test_payloads_from_tasks_dedupes_by_number():
     tasks = [_FakeTask("1"), _FakeTask("1"), _FakeTask("2")]
-    payloads = payloads_from_tasks(tasks)  # type: ignore[arg-type]
+    payloads = payloads_from_tasks(tasks)  # ty: ignore[invalid-argument-type]
     assert [p["number"] for p in payloads] == ["1", "2"]
 
 
 def test_payloads_from_tasks_skips_failures():
     tasks = [_FakeTask("1"), _FakeTask("2", raises=True), _FakeTask("3")]
-    payloads = payloads_from_tasks(tasks)  # type: ignore[arg-type]
+    payloads = payloads_from_tasks(tasks)  # ty: ignore[invalid-argument-type]
     assert [p["number"] for p in payloads] == ["1", "3"]
 
 
