@@ -358,12 +358,14 @@ def _outputcfg_from_args(args: argparse.Namespace, persistor: BugPersistor | Non
 
 def main() -> None:
     try:
-        asyncio.run(_run())
+        had_errors = asyncio.run(_run())
     except KeyboardInterrupt:
         sys.exit(130)
+    if had_errors:
+        sys.exit(1)
 
 
-async def _run() -> None:
+async def _run() -> bool:
     parser = _build_parser()
     args = parser.parse_args()
 
@@ -371,10 +373,10 @@ async def _run() -> None:
 
     config = load_config(args.config)
 
-    await args.func(args, config)
+    return bool(await args.func(args, config))
 
 
-async def _run_triage(args: argparse.Namespace, config: StarTriageConfig) -> None:
+async def _run_triage(args: argparse.Namespace, config: StarTriageConfig) -> bool:
     provider = None
     output_cfg = _outputcfg_from_args(args)
     if args.ai is not None:
@@ -401,7 +403,7 @@ async def _run_triage(args: argparse.Namespace, config: StarTriageConfig) -> Non
         general = general.model_copy(update={"proposed_min_age": args.proposed_min_age})
     config.general = general
 
-    results = await run_triage(config, filter, output_cfg)
+    results, had_errors = await run_triage(config, filter, output_cfg)
 
     if args.ai is not None:
         from .ai import emit_ai_report, run_ai_over_triage_results
@@ -410,8 +412,10 @@ async def _run_triage(args: argparse.Namespace, config: StarTriageConfig) -> Non
         if report is not None:
             emit_ai_report(report, output_cfg.markdown_path)
 
+    return had_errors
 
-async def _run_todo(args: argparse.Namespace, config: StarTriageConfig) -> None:
+
+async def _run_todo(args: argparse.Namespace, config: StarTriageConfig) -> bool:
     if args.flag_recent is None and not args.subscribed:
         args.flag_recent = 6  # default flag-recent for todo mode
 
@@ -426,7 +430,7 @@ async def _run_todo(args: argparse.Namespace, config: StarTriageConfig) -> None:
 
     output_cfg = _outputcfg_from_args(args, BugPersistor(save_cfg))
 
-    await run_todo(
+    return await run_todo(
         config,
         filter,
         output_cfg=output_cfg,
@@ -434,16 +438,16 @@ async def _run_todo(args: argparse.Namespace, config: StarTriageConfig) -> None:
     )
 
 
-async def _run_analyze(args: argparse.Namespace, config: StarTriageConfig) -> None:
+async def _run_analyze(args: argparse.Namespace, config: StarTriageConfig) -> bool:
     if args.ai is None:
         from .ai import describe_bug_specs
 
         report = await describe_bug_specs(args.bug)
         if report is None:
             print("No valid bugs found.", file=sys.stderr)
-            return
+            return True
         print(report)
-        return
+        return False
 
     from .ai import build_provider, run_ai_over_bug_specs
 
@@ -451,11 +455,12 @@ async def _run_analyze(args: argparse.Namespace, config: StarTriageConfig) -> No
     report = await run_ai_over_bug_specs(config, args.bug, provider=provider)
     if report is None:
         print("No valid bugs to triage.", file=sys.stderr)
-        return
+        return True
     print(report)
+    return False
 
 
-async def _set_config_settings(args: argparse.Namespace, _config: StarTriageConfig) -> None:
+async def _set_config_settings(args: argparse.Namespace, _config: StarTriageConfig) -> bool:
     updates: dict[str, dict] = {}
 
     if args.default_team:
@@ -489,13 +494,14 @@ async def _set_config_settings(args: argparse.Namespace, _config: StarTriageConf
 
     if not updates:
         print("No settings to update.")
-        return
+        return False
 
     sensitive = "github_token" in updates.get("general", {}) or bool(
         {"github_token", "openrouter_api_key"} & updates.get("ai", {}).keys()
     )
     path = update_user_config(updates, config_path=args.config, sensitive=sensitive)
     print(f"Settings saved to {path!r}")
+    return False
 
 
 async def _show_config(args: argparse.Namespace, config: StarTriageConfig) -> None:

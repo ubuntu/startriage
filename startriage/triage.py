@@ -49,11 +49,12 @@ async def run_triage(
     config: StarTriageConfig,
     opts: TaskFilterOptions,
     output_cfg: OutputConfig,
-) -> list[tuple[str, TriageResult]]:
+) -> tuple[list[tuple[str, TriageResult]], bool]:
     """Daily triage: fetch all sources concurrently, print sections in order as they complete.
 
-    Returns the ``(source_name, result)`` pairs that were fetched successfully so
-    callers (e.g. ``triage --ai``) can reuse them without re-fetching.
+    Returns a tuple of the ``(source_name, result)`` pairs that were fetched
+    successfully (so callers such as ``triage --ai`` can reuse them without
+    re-fetching) and a ``had_errors`` flag indicating whether any source failed.
     """
 
     range = triage_task_note = ""
@@ -99,7 +100,7 @@ async def run_triage(
     for source in opts.sources:
         fetch_tasks[source.name] = asyncio.create_task(source.find(config, opts, FetchMode.triage))
 
-    results = await _output_results(output_cfg, fetch_tasks)
+    results, had_errors = await _output_results(output_cfg, fetch_tasks)
 
     # create markdown template
     if output_cfg.markdown_path:
@@ -126,7 +127,7 @@ async def run_triage(
 
         logging.info("Markdown written to %s", output_cfg.markdown_path)
 
-    return results
+    return results, had_errors
 
 
 async def run_todo(
@@ -134,12 +135,14 @@ async def run_todo(
     filter: TaskFilterOptions,
     output_cfg: OutputConfig,
     subscribed: bool = False,
-) -> None:
+) -> bool:
     """Todo / housekeeping triage: tag-filtered bugs, no date filter.
 
     All sources in *filter.sources* are optional — pass a subset to fetch only
     that source.  *subscribed* only controls LP fetch mode (subscription list
     vs. todo tag); GitHub is filtered by label regardless.
+
+    Returns ``had_errors``, ``True`` if any source failed to fetch.
     """
     mode = FetchMode.subscribed if subscribed else FetchMode.todo
 
@@ -150,17 +153,20 @@ async def run_todo(
     for source in filter.sources:
         fetch_tasks[source.name] = asyncio.create_task(source.find(config, filter, mode))
 
+    had_errors = False
     if output_cfg.bug_persistor is not None:
-        results = await _output_results(output_cfg, fetch_tasks)
+        results, had_errors = await _output_results(output_cfg, fetch_tasks)
         for _, result in results:
             await result.record(output_cfg.bug_persistor)
 
         output_cfg.bug_persistor.save()
 
+    return had_errors
+
 
 async def _output_results(
     output_cfg: OutputConfig, fetch_tasks: dict[str, asyncio.Task[TriageResult]]
-) -> list[tuple[str, TriageResult]]:
+) -> tuple[list[tuple[str, TriageResult]], bool]:
     async with Spinner(set(fetch_tasks.keys())) as spinner:
         gathered: list[tuple[str, TriageResult | Exception]] = await asyncio.gather(
             *[_await_and_print(output_cfg, source, task, spinner) for source, task in fetch_tasks.items()]
@@ -172,7 +178,8 @@ async def _output_results(
             print(f"\nError fetching {source!r}:", file=sys.stderr)
             traceback.print_exception(exc, file=sys.stderr)
 
-    return [(s, r) for s, r in gathered if not isinstance(r, Exception)]
+    results = [(s, r) for s, r in gathered if not isinstance(r, Exception)]
+    return results, bool(errors)
 
 
 # Print sections in canonical order as each completes
