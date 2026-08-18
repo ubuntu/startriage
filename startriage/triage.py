@@ -12,7 +12,7 @@ from datetime import time
 from .config import StarTriageConfig
 from .dates import compact_date_range, reverse_triage_task_day
 from .enums import FetchMode
-from .output import OutputConfig, OutputFormat, TriageResult
+from .output import FailedTriageResult, OutputConfig, OutputFormat, TriageResult
 from .source import TaskFilterOptions, TriageSource
 from .sources.discourse.triage import find as discourse_find
 from .sources.github.triage import find as github_find
@@ -52,8 +52,8 @@ async def run_triage(
 ) -> list[tuple[str, TriageResult]]:
     """Daily triage: fetch all sources concurrently, print sections in order as they complete.
 
-    Returns the ``(source_name, result)`` pairs that were fetched successfully so
-    callers (e.g. ``triage --ai``) can reuse them without re-fetching.
+    Returns the ``(source_name, result)`` pairs so callers (e.g. ``triage --ai``)
+    can reuse them without re-fetching.
     """
 
     range = triage_task_note = ""
@@ -99,7 +99,7 @@ async def run_triage(
     for source in opts.sources:
         fetch_tasks[source.name] = asyncio.create_task(source.find(config, opts, FetchMode.triage))
 
-    results = await _output_results(output_cfg, fetch_tasks)
+    results = await _render_sections(output_cfg, fetch_tasks)
 
     # create markdown template
     if output_cfg.markdown_path:
@@ -112,8 +112,8 @@ async def run_triage(
 
         md_cfg = OutputConfig(fmt=OutputFormat.MARKDOWN, out=buf, open_in_browser=False, terminal_links=False)
 
-        # ensure the section order
-        result_map = dict(results)
+        # ensure the section order; skip sources that failed to fetch
+        result_map = {s: r for s, r in results if r.error is None}
         for source in ("launchpad", "github", "discourse", "proposed"):
             if source not in result_map:
                 continue
@@ -134,12 +134,15 @@ async def run_todo(
     filter: TaskFilterOptions,
     output_cfg: OutputConfig,
     subscribed: bool = False,
-) -> None:
+) -> list[tuple[str, TriageResult]]:
     """Todo / housekeeping triage: tag-filtered bugs, no date filter.
 
     All sources in *filter.sources* are optional — pass a subset to fetch only
     that source.  *subscribed* only controls LP fetch mode (subscription list
     vs. todo tag); GitHub is filtered by label regardless.
+
+    Returns the ``(source_name, result)`` pairs; sources whose fetch raised are
+    returned as ``FailedTriageResult`` carrying the exception in ``.error``.
     """
     mode = FetchMode.subscribed if subscribed else FetchMode.todo
 
@@ -150,40 +153,51 @@ async def run_todo(
     for source in filter.sources:
         fetch_tasks[source.name] = asyncio.create_task(source.find(config, filter, mode))
 
+    results = await _render_sections(output_cfg, fetch_tasks)
+
     if output_cfg.bug_persistor is not None:
-        results = await _output_results(output_cfg, fetch_tasks)
         for _, result in results:
             await result.record(output_cfg.bug_persistor)
 
         output_cfg.bug_persistor.save()
 
+    return results
 
-async def _output_results(
+
+def print_fetch_errors(results: list[tuple[str, TriageResult]]) -> bool:
+    """Print tracebacks for sources whose fetch failed; return True if any failed."""
+    failed = False
+    for source, result in results:
+        if result.error is None:
+            continue
+        failed = True
+        print(f"\nError fetching {source!r}:", file=sys.stderr)
+        traceback.print_exception(result.error, file=sys.stderr)
+    return failed
+
+
+async def _render_sections(
     output_cfg: OutputConfig, fetch_tasks: dict[str, asyncio.Task[TriageResult]]
 ) -> list[tuple[str, TriageResult]]:
+    """Render sections as fetches complete; failed fetches come back as ``FailedTriageResult``.
+
+    Reporting of fetch errors is left to the caller; see ``print_fetch_errors``.
+    """
     async with Spinner(set(fetch_tasks.keys())) as spinner:
-        gathered: list[tuple[str, TriageResult | Exception]] = await asyncio.gather(
+        return await asyncio.gather(
             *[_await_and_print(output_cfg, source, task, spinner) for source, task in fetch_tasks.items()]
         )
 
-    errors = [(s, e) for s, e in gathered if isinstance(e, Exception)]
-    if errors:
-        for source, exc in errors:
-            print(f"\nError fetching {source!r}:", file=sys.stderr)
-            traceback.print_exception(exc, file=sys.stderr)
 
-    return [(s, r) for s, r in gathered if not isinstance(r, Exception)]
-
-
-# Print sections in canonical order as each completes
+# Print sections as each completes, so we don't have to wait for the slowest source
 async def _await_and_print(
     output_cfg: OutputConfig, source: str, task: asyncio.Task, spinner: Spinner
-) -> tuple[str, TriageResult | Exception]:
+) -> tuple[str, TriageResult]:
     try:
         result: TriageResult = await task
     except Exception as exc:
         spinner.done(source)
-        return source, exc
+        return source, FailedTriageResult(exc)
 
     spinner.done(source)
     spinner.clear()

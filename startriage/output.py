@@ -33,6 +33,10 @@ class OutputConfig:
 
 
 class TriageResult(ABC):
+    """Per-source triage outcome; ``error`` is set when the fetch itself failed."""
+
+    error: Exception | None = None
+
     @abstractmethod
     async def print_section(
         self,
@@ -43,6 +47,19 @@ class TriageResult(ABC):
     @abstractmethod
     async def record(self, persistor: BugPersistor) -> None:
         raise NotImplementedError
+
+
+class FailedTriageResult(TriageResult):
+    """TriageResult stand-in for a source whose fetch raised an exception."""
+
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+
+    async def print_section(self, cfg: OutputConfig) -> None:
+        """Nothing to render; the traceback is reported to stderr."""
+
+    async def record(self, persistor: BugPersistor) -> None:
+        """Nothing to persist for a failed fetch."""
 
 
 @lru_cache(maxsize=256)

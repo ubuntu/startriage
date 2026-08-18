@@ -22,7 +22,7 @@ from .output import OutputConfig, OutputFormat
 from .savebugs import BugPersistor, SaveConfig
 from .source import TaskFilterOptions
 from .sources.github.auth import _run_github_login
-from .triage import SOURCES, resolve_sources, run_todo, run_triage
+from .triage import SOURCES, print_fetch_errors, resolve_sources, run_todo, run_triage
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -403,6 +403,9 @@ async def _run_triage(args: argparse.Namespace, config: StarTriageConfig) -> Non
 
     results = await run_triage(config, filter, output_cfg)
 
+    if print_fetch_errors(results):
+        sys.exit(1)
+
     if args.ai is not None:
         from .ai import emit_ai_report, run_ai_over_triage_results
 
@@ -426,12 +429,15 @@ async def _run_todo(args: argparse.Namespace, config: StarTriageConfig) -> None:
 
     output_cfg = _outputcfg_from_args(args, BugPersistor(save_cfg))
 
-    await run_todo(
+    results = await run_todo(
         config,
         filter,
         output_cfg=output_cfg,
         subscribed=args.subscribed,
     )
+
+    if print_fetch_errors(results):
+        sys.exit(1)
 
 
 async def _run_analyze(args: argparse.Namespace, config: StarTriageConfig) -> None:
