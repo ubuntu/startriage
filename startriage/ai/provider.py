@@ -114,9 +114,7 @@ class CopilotProvider(Provider):
         if self._permission is AIPermission.restricted:
             system_prompt += RESTRICTED_PROMPT_NOTE
 
-        logger.debug(
-            "Starting Copilot session (model=%s, permission=%s)", self.model, self._permission
-        )
+        logger.debug("Starting Copilot session (model=%s, permission=%s)", self.model, self._permission)
         async with CopilotClient(**build_client_kwargs(self._ai_config)) as client:
             async with await client.create_session(
                 on_permission_request=build_permission_handler(self._permission),
@@ -187,11 +185,13 @@ def build_permission_handler(permission: AIPermission) -> Any:
         case AIPermission.full:
             return PermissionHandler.approve_all
         case AIPermission.restricted:
+
             def reject(request: Any, invocation: Any) -> Any:
                 return PermissionDecisionReject(feedback="Tool execution is disabled for this run.")
 
             return reject
         case AIPermission.ask:
+
             async def ask(request: Any, invocation: Any) -> Any:
                 summary = getattr(request, "full_command_text", None) or type(request).__name__
                 answer = await asyncio.to_thread(input, f"Allow the agent to run: {summary}? [y/N] ")
