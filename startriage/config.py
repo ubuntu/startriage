@@ -160,6 +160,7 @@ class StarTriageConfig(BaseModel):
     ai: AIConfig = AIConfig()
     team: dict[str, TeamConfig] = {}
     loaded_paths: list[Path] = []
+    searched_paths: list[Path] = []  # user config locations consulted
 
     def get_team(self, name: str) -> TeamConfig:
         """Return TeamConfig for the named team, raising KeyError if not found."""
@@ -170,19 +171,23 @@ class StarTriageConfig(BaseModel):
             raise KeyError(f"Unknown team '{name}'. Available teams: {available}") from None
 
     def show(self) -> str:
+        # mode="json" so Path and enum values become plain strings for tomli_w
         data: dict = {"general": {}, "ai": {}, "team": {}}
-        for field, value in self.general.model_dump(exclude_none=True).items():
+        for field, value in self.general.model_dump(mode="json", exclude_none=True).items():
             data["general"][field] = value
-        for field, value in self.ai.model_dump(exclude_none=True).items():
+        for field, value in self.ai.model_dump(mode="json", exclude_none=True).items():
             data["ai"][field] = value
         for team_name, team in self.team.items():
-            data["team"][team_name] = team.model_dump(exclude_none=True)
+            data["team"][team_name] = team.model_dump(mode="json", exclude_none=True)
 
         lines: list[str] = []
         for p in self.loaded_paths:
             lines.append(f"# loaded from: {p}")
-        if self.loaded_paths:
-            lines.append("")
+        missing = [p for p in self.searched_paths if p not in self.loaded_paths]
+        if missing:
+            lines.append("# no config found, searched:")
+            lines.extend(f"#   {p}" for p in missing)
+        lines.append("")
         lines.append(tomli_w.dumps(data).rstrip())
         return "\n".join(lines)
 
@@ -270,7 +275,13 @@ def load_config(user_config_path: Path | None) -> StarTriageConfig:
     }
 
     return StarTriageConfig.model_validate(
-        {"general": merged_general, "ai": merged_ai, "team": merged_teams, "loaded_paths": loaded_paths}
+        {
+            "general": merged_general,
+            "ai": merged_ai,
+            "team": merged_teams,
+            "loaded_paths": loaded_paths,
+            "searched_paths": [path],
+        }
     )
 
 

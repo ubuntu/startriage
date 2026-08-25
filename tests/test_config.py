@@ -44,6 +44,30 @@ def test_general_override(tmp_path):
     assert config.general.savebugs_dir == bugs_dir
 
 
+def test_show_serializes_paths(tmp_path):
+    """savebugs_dir is a Path; show() must render it as a TOML string."""
+    bugs_dir = tmp_path / "savebugs"
+    bugs_dir.mkdir()
+    p = _write_toml(
+        tmp_path,
+        f"""\
+        [general]
+        savebugs_dir = "{bugs_dir}"
+        """,
+    )
+    out = load_config(p).show()
+    assert f'savebugs_dir = "{bugs_dir}"' in out
+    assert "no config" not in out
+
+
+def test_show_without_user_config(tmp_path):
+    """Without a user config file, show() says so and lists the searched path."""
+    missing = tmp_path / "nonexistent.toml"
+    out = load_config(missing).show()
+    assert "# no config found, searched:" in out
+    assert f"#   {missing}" in out
+
+
 def test_team_override_replaces_ignore_list(tmp_path):
     p = _write_toml(
         tmp_path,
