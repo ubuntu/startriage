@@ -95,7 +95,7 @@ class LaunchpadTriage(TriageResult):
             order_by_date=(self.mode == FetchMode.subscribed),
         )
 
-        if self.mode == FetchMode.triage:
+        if self.mode == FetchMode.triage and self.filter.show_expiration:
             await _print_old_bugs(
                 self.tasks.lp,
                 self.tasks.expiring_tagged,
