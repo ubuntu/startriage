@@ -37,10 +37,18 @@ def mark(text: str, color: str) -> str:
 
 
 def _name_from_link(link: str | None) -> str | None:
-    """Extract a username from a Launchpad person link (``.../~username``)."""
-    if not link or "~" not in link:
+    """Extract a display name from a Launchpad API link.
+
+    Person and team links end in ``~name``; other assignee shapes (projects,
+    distributions) end in a plain path segment, possibly prefixed with ``+``
+    (e.g. ``+project``) which is stripped for display.
+    """
+    if not link:
         return None
-    return link.split("~")[-1]
+    if "~" in link:
+        return link.split("~")[-1]
+    name = link.rstrip("/").rsplit("/", 1)[-1].removeprefix("+")
+    return name or None
 
 
 def _affected_from_task(lp_task: Any) -> dict[str, Any]:
@@ -108,10 +116,7 @@ class Task:
         self.src: str = self.title.split(" ")[3]
         self.tags: list[str] = lp_task.bug.tags
         self.date_last_updated = lp_task.bug.date_last_updated
-        if lp_task.assignee_link:
-            self.assignee: str | None = lp_task.assignee_link.split("~")[1]
-        else:
-            self.assignee = None
+        self.assignee: str | None = _name_from_link(lp_task.assignee_link)
         self.lp_task = lp_task
 
     def __eq__(self, other: object) -> bool:
@@ -184,8 +189,7 @@ class Task:
         if self.assignee:
             seen[self.assignee] = None
         for lp_task in self._all_bug_tasks:
-            if lp_task.assignee_link:
-                name = lp_task.assignee_link.split("~")[1]
+            if name := _name_from_link(lp_task.assignee_link):
                 seen[name] = None
         return list(seen)
 

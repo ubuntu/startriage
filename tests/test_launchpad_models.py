@@ -151,3 +151,15 @@ def test_to_agent_payload_affected_targets():
 def test_to_agent_payload_duplicate_of():
     payload = _build_task(duplicate_of=_FakeDuplicate(999)).to_agent_payload()
     assert payload["duplicate_of"] == "999"
+
+
+def test_assignee_from_person_link():
+    task = _build_task()
+    task.lp_task.assignee_link = "https://api.launchpad.net/devel/~jane"
+    assert Task(task.lp_task, subscribed=False, last_activity_ours=False).assignee == "jane"
+
+
+def test_assignee_from_non_person_link():
+    task = _build_task()
+    task.lp_task.assignee_link = "https://api.launchpad.net/devel/someproject"
+    assert Task(task.lp_task, subscribed=False, last_activity_ours=False).assignee == "someproject"
