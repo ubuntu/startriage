@@ -33,9 +33,13 @@ class OutputConfig:
 
 
 class TriageResult(ABC):
-    """Per-source triage outcome; ``error`` is set when the fetch itself failed."""
+    """Per-source triage outcome; ``error`` is set when the fetch itself failed.
 
-    error: Exception | None = None
+    A string error is a ready-to-display one-line message for known failures;
+    an exception is printed with a full traceback.
+    """
+
+    error: Exception | str | None = None
 
     @abstractmethod
     async def print_section(
@@ -52,7 +56,7 @@ class TriageResult(ABC):
 class FailedTriageResult(TriageResult):
     """TriageResult stand-in for a source whose fetch raised an exception."""
 
-    def __init__(self, error: Exception) -> None:
+    def __init__(self, error: Exception | str) -> None:
         self.error = error
 
     async def print_section(self, cfg: OutputConfig) -> None:

@@ -165,14 +165,21 @@ async def run_todo(
 
 
 def print_fetch_errors(results: list[tuple[str, TriageResult]]) -> bool:
-    """Print tracebacks for sources whose fetch failed; return True if any failed."""
+    """Print errors for sources whose fetch failed; return True if any failed.
+
+    String errors are shown compactly on one line; exceptions get a full
+    traceback.
+    """
     failed = False
     for source, result in results:
         if result.error is None:
             continue
         failed = True
         print(f"\nError fetching {source!r}:", file=sys.stderr)
-        traceback.print_exception(result.error, file=sys.stderr)
+        if isinstance(result.error, str):
+            print(f"  {result.error}", file=sys.stderr)
+        else:
+            traceback.print_exception(result.error, file=sys.stderr)
     return failed
 
 

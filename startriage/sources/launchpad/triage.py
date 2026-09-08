@@ -6,15 +6,24 @@ import asyncio
 import dataclasses
 import json
 import logging
+import re
 import webbrowser
 from dataclasses import dataclass, field
 
 import aiohttp
 from launchpadlib.launchpad import Launchpad
+from lazr.restfulclient.errors import ServerError
 
 from ...config import GeneralConfig, StarTriageConfig, TeamConfig
 from ...enums import FetchMode
-from ...output import OutputConfig, OutputFormat, TriageResult, hyperlink, truncate_string
+from ...output import (
+    FailedTriageResult,
+    OutputConfig,
+    OutputFormat,
+    TriageResult,
+    hyperlink,
+    truncate_string,
+)
 from ...savebugs import BugPersistor
 from ...source import TaskFilterOptions
 from .finder import connect_launchpad, fetch_bugs, fetch_changelogs
@@ -277,7 +286,7 @@ async def find(
     config: StarTriageConfig,
     filter: TaskFilterOptions,
     mode: FetchMode,
-) -> LaunchpadTriage:
+) -> TriageResult:
     """Fetch Launchpad bugs."""
     effective_update_filter = filter.update_filter or config.general.lp_triage_updates
 
@@ -286,16 +295,24 @@ async def find(
     logger.debug("Logging into Launchpad…")
     lp = connect_launchpad()
     logger.debug("Fetching Launchpad bugs…")
-    lp_tasks = await asyncio.to_thread(
-        fetch_bugs,
-        lp,
-        team_config,
-        filter,
-        mode,
-        effective_update_filter,
-        config.general.lp_expire_level1_days,
-        config.general.lp_expire_level2_days,
-    )
+    try:
+        lp_tasks = await asyncio.to_thread(
+            fetch_bugs,
+            lp,
+            team_config,
+            filter,
+            mode,
+            effective_update_filter,
+            config.general.lp_expire_level1_days,
+            config.general.lp_expire_level2_days,
+        )
+    except ServerError as exc:
+        # no traceback for LP internal errors/overloads, but show the OOPS id
+        exc_str = str(exc)
+        msg = f"{type(exc).__module__}.{type(exc).__qualname__}: {exc_str.splitlines()[0]}"
+        if oops := re.search(r"OOPS-[0-9a-f]+", exc_str):
+            msg += f" ({oops.group()})"
+        return FailedTriageResult(msg)
     logger.info("Launchpad: %d bugs fetched. Checking unapproved queue…", len(lp_tasks.tasks))
 
     async with aiohttp.ClientSession() as session:
