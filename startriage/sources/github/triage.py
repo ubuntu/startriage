@@ -239,6 +239,7 @@ async def find(
 
     # Build list of (repo_name, labels) for batch fetching
     repo_specs: list[tuple[str, list[str] | None]] = []
+    ignore_labels: dict[str, set[str]] = {}
     for repo_cfg in team_config.github_repos:
         labels = None
         if mode == FetchMode.todo:
@@ -248,7 +249,20 @@ async def find(
                 labels = team_label_list
         repo_specs.append((repo_cfg.name, labels))
 
+        ignored = (
+            repo_cfg.ignore_labels if repo_cfg.ignore_labels is not None else team_config.github_ignore_labels
+        )
+        if ignored:
+            ignore_labels[repo_cfg.name] = set(ignored)
+
     async with aiohttp.ClientSession(headers=headers) as session:
         results = await fetch_repos(session, repo_specs, mode, start, end)
+
+    # Drop results that include at least one of the ignored labels when doing triage.
+    if mode == FetchMode.triage:
+        for r in results:
+            if ignore := ignore_labels.get(r.repo):
+                r.prs = [p for p in r.prs if ignore.isdisjoint(p.labels)]
+                r.issues = [i for i in r.issues if ignore.isdisjoint(i.labels)]
 
     return GithubTriage(start=start, end=end, results=results, mode=mode)
