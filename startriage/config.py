@@ -122,6 +122,7 @@ class GithubRepoConfig(BaseModel):
     name: str  # org/reponame
     todo_labels: list[str] | None = None
     watch_labels: list[str] | None = None
+    ignore_labels: list[str] | None = None
 
     @classmethod
     def from_str_or_dict(cls, v: object) -> GithubRepoConfig:
@@ -140,6 +141,7 @@ class TeamConfig(BaseModel):
     discourse_categories: list[str] = []
     discourse_triage_categories: list[str] = []
     github_todo_labels: list[str] | None = None  # overridden by github_repos[*].todo_labels
+    github_ignore_labels: list[str] | None = None  # overridden by github_repos[*].ignore_labels
     # TODO: github_watch_labels: list[str] | None = None  # overridden by github_repos[*].watch_labels
     github_repos: list[GithubRepoConfig] = []
     proposed_migration_teams: list[str] = []

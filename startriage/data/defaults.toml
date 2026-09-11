@@ -45,4 +45,5 @@ github_repos = [
     "canonical/git-ubuntu-operator",
 ]
 github_todo_labels = ["server-todo"]
+github_ignore_labels = ["server-triage-ignore"]
 proposed_migration_teams = ["ubuntu-server"]
