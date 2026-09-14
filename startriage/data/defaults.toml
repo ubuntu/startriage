@@ -38,6 +38,7 @@ github_repos = [
     {name = "canonical/ubuntu-server-documentation", todo_labels = ["For: Server ToDo"]},
     "canonical/containerd-stable",
     "canonical/containerd-app",
+    "canonical/pollen",
     "canonical/runc-app",
     "canonical/runc-stable",
     "canonical/ubuntu-debuginfod-operator",
