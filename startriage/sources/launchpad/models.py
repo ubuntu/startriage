@@ -459,3 +459,4 @@ class LaunchpadTasks:
     open_statuses: list[str] = field(default_factory=list)
     expiring_tagged: list[Task] = field(default_factory=list)
     expiring_subscribed: list[Task] = field(default_factory=list)
+    freezer_tasks: list[Task] = field(default_factory=list)

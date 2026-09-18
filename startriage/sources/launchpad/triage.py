@@ -104,6 +104,22 @@ class LaunchpadTriage(TriageResult):
             order_by_date=(self.mode == FetchMode.subscribed),
         )
 
+        if self.mode == FetchMode.todo and self.tasks.freezer_tasks:
+            freezer_count = len({t.number for t in self.tasks.freezer_tasks})
+            plural = "item" if freezer_count == 1 else "items"
+            print(
+                f"### Freezer ({freezer_count} {plural}, tag={self.team_config.lp_freezer_tag})",
+                file=cfg.out,
+            )
+            await _print_bugs(
+                self.tasks.lp,
+                self.tasks.freezer_tasks,
+                ctx,
+                dataclasses.replace(cfg, bug_persistor=None),
+                extended,
+                order_by_date=True,
+            )
+
         if self.mode == FetchMode.triage and self.filter.show_expiration:
             await _print_old_bugs(
                 self.tasks.lp,

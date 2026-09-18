@@ -18,6 +18,7 @@ lp_triage_updates = "theirs"
 [team.ubuntu-server]
 lp_team = "ubuntu-server"
 lp_todo_tag = "server-todo"
+lp_freezer_tag = "server-freezer"
 lp_ignore_packages = [
     "cloud-init",
     "curtin",

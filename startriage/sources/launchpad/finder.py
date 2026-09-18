@@ -285,13 +285,17 @@ def fetch_bugs(
             bugs_in_range = {k: v for k, v in bugs_start.items() if k not in bugs_end}
 
         case FetchMode.todo:
-            logger.debug("fetching todo tasks (tag %s)...", team_config.lp_todo_tag)
+            # A bug tagged both todo and freezer counts as todo (actionable).
+            tags = [team_config.lp_todo_tag]
+            if team_config.lp_freezer_tag:
+                tags.append(team_config.lp_freezer_tag)
+            logger.debug("fetching todo tasks (tags %s)...", tags)
             bugs_in_range = {
                 (t.bug_link, _fast_target_name(t)): t
                 for t in _search_tasks_all_series(
                     ubuntu,
-                    tags=[team_config.lp_todo_tag, "-bot-stop-nagging"],
-                    tags_combinator="All",
+                    tags=tags,
+                    tags_combinator="Any",
                     status=TRACKED_BUG_STATUSES,
                 )
             }
@@ -315,6 +319,7 @@ def fetch_bugs(
             raise ValueError(f"Unknown fetch mode: {mode!r}")
 
     tasks = set()
+    freezer_tasks: list[Task] = []
     bugs_touched_by_us_last: dict[str, bool] = {}
     for (bug_link, _), lp_task in bugs_in_range.items():
         src = _fast_target_name(lp_task)
@@ -337,7 +342,16 @@ def fetch_bugs(
             last_activity_ours=is_ours,
         )
         logger.debug("listing bug task %s for pkg %s bug %s", task, src, bug_link)
-        tasks.add(task)
+        if (
+            mode == FetchMode.todo
+            and team_config.lp_freezer_tag
+            and team_config.lp_freezer_tag in task.tags
+            and team_config.lp_todo_tag not in task.tags
+        ):
+            # freezer tasks: watched but not actionable yet
+            freezer_tasks.append(task)
+        else:
+            tasks.add(task)
 
     # Expiration section: bugs that fell through the triage window N days ago.
     # Uses the same shifted-window set-difference pattern as the main triage query.
@@ -419,4 +433,5 @@ def fetch_bugs(
         OPEN_BUG_STATUSES,
         expiring_tagged,
         expiring_subscribed,
+        freezer_tasks,
     )
