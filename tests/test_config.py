@@ -149,11 +149,12 @@ def test_github_token_config(tmp_path):
     assert config.general.github_token == "ghp_secret"
 
 
-def test_ai_defaults(tmp_path):
-    """No [ai] section yields sensible Copilot defaults."""
+def test_ai_no_defaults(tmp_path):
+    """No [ai] section leaves provider/model unset (issue #7: no silent default)."""
     config = load_config(tmp_path / "nonexistent.toml")
-    assert config.ai.provider is AIProvider.copilot
-    assert config.ai.model == "claude-opus-4.8"
+    assert config.ai.provider is None
+    assert config.ai.model is None
+    assert config.ai.resolve_token() is None
     assert config.ai.openrouter_base_url == "https://openrouter.ai/api/v1"
 
 
@@ -181,8 +182,30 @@ def test_ai_invalid_provider(tmp_path):
         provider = "bogus"
         """,
     )
-    with pytest.raises(ValidationError):
+    # Reported at load time, with the supported list, not as a pydantic dump.
+    with pytest.raises(AIConfigError, match="Unsupported AI provider 'bogus'") as exc:
         load_config(p)
+    assert "copilot, openrouter" in str(exc.value)
+
+
+@pytest.mark.parametrize("field", ["provider", "model"])
+@pytest.mark.parametrize("value", ["", "   "])
+def test_ai_empty_provider_or_model_rejected(tmp_path, field, value):
+    p = _write_toml(
+        tmp_path,
+        f"""\
+        [ai]
+        {field} = {value!r}
+        """,
+    )
+    with pytest.raises(AIConfigError, match=rf"\[ai\] {field} must not be empty"):
+        load_config(p)
+
+
+def test_ai_provider_and_model_whitespace_trimmed():
+    config = AIConfig(provider=" copilot ", model=" claude-opus-4.8 ")
+    assert config.provider is AIProvider.copilot
+    assert config.model == "claude-opus-4.8"
 
 
 def test_ai_extra_field_rejected(tmp_path):
@@ -203,6 +226,7 @@ def test_ai_resolve_token_prefers_config(tmp_path, monkeypatch):
         tmp_path,
         """\
         [ai]
+        provider = "copilot"
         github_token = "cfg_token"
         """,
     )
@@ -214,14 +238,39 @@ def test_ai_resolve_token_from_env(tmp_path, monkeypatch):
     for var in ("COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("GH_TOKEN", "env_token")
+    p = _write_toml(
+        tmp_path,
+        """\
+        [ai]
+        provider = "copilot"
+        """,
+    )
+    assert load_config(p).ai.resolve_token() == "env_token"
+
+
+def test_ai_unconfigured_backend_explains_setup(tmp_path):
     config = load_config(tmp_path / "nonexistent.toml")
-    assert config.ai.resolve_token() == "env_token"
+    with pytest.raises(AIConfigError, match="provider and model are unset") as exc:
+        AIConfig.model_validate(config.ai.model_dump(), context={"require_ai": True})
+    message = str(exc.value)
+    assert "startriage config set --ai-provider" in message
+    assert "--ai-model" in message
+    assert "copilot, openrouter" in message
+    assert "github.com/ubuntu/startriage#configuring-the-ai-backend" in message
 
 
 def test_ai_check_token_copilot_missing(tmp_path, monkeypatch):
     for var in ("COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"):
         monkeypatch.delenv(var, raising=False)
-    config = load_config(tmp_path / "nonexistent.toml")
+    p = _write_toml(
+        tmp_path,
+        """\
+        [ai]
+        provider = "copilot"
+        model = "a-copilot-model"
+        """,
+    )
+    config = load_config(p)
     with pytest.raises(AIConfigError, match="Copilot"):
         AIConfig.model_validate(config.ai.model_dump(), context={"require_ai": True})
 
@@ -234,6 +283,7 @@ def test_ai_check_token_openrouter_missing(tmp_path, monkeypatch):
         """\
         [ai]
         provider = "openrouter"
+        model = "vendor/a-model"
         """,
     )
     config = load_config(p)
@@ -243,7 +293,7 @@ def test_ai_check_token_openrouter_missing(tmp_path, monkeypatch):
 
 def test_ai_check_token_skipped_without_context(tmp_path, monkeypatch):
     # Non-AI commands validate AIConfig on every load; without the require_ai
-    # context the missing-credential check must not fire.
+    # context neither the missing-backend nor the missing-credential check fires.
     for var in ("COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"):
         monkeypatch.delenv(var, raising=False)
     config = load_config(tmp_path / "nonexistent.toml")

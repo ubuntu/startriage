@@ -28,8 +28,13 @@ def _clear_ai_env(monkeypatch):
         monkeypatch.delenv(var, raising=False)
 
 
+def _copilot(**overrides) -> AIConfig:
+    """A minimally complete Copilot config (provider/model have no defaults)."""
+    return AIConfig(provider=AIProvider.copilot, model="a-copilot-model", **overrides)
+
+
 def test_build_session_kwargs_copilot_with_token():
-    cfg = AIConfig(github_token="github_pat_abc")
+    cfg = _copilot(github_token="github_pat_abc")
     # The Copilot token authenticates the client, not the session.
     assert build_client_kwargs(cfg) == {"github_token": "github_pat_abc"}
     assert build_session_kwargs(cfg) == {}
@@ -37,14 +42,14 @@ def test_build_session_kwargs_copilot_with_token():
 
 def test_build_session_kwargs_copilot_without_token():
     # No config token and no env var -> SDK is left to read the env itself.
-    assert build_client_kwargs(AIConfig()) == {}
-    assert build_session_kwargs(AIConfig()) == {}
+    assert build_client_kwargs(_copilot()) == {}
+    assert build_session_kwargs(_copilot()) == {}
 
 
 def test_build_session_kwargs_copilot_token_from_env(monkeypatch):
     monkeypatch.setenv("COPILOT_GITHUB_TOKEN", "env_token")
-    assert build_client_kwargs(AIConfig()) == {"github_token": "env_token"}
-    assert build_session_kwargs(AIConfig()) == {}
+    assert build_client_kwargs(_copilot()) == {"github_token": "env_token"}
+    assert build_session_kwargs(_copilot()) == {}
 
 
 def test_build_session_kwargs_openrouter():
@@ -67,6 +72,7 @@ def test_build_session_kwargs_openrouter():
 def test_build_session_kwargs_openrouter_custom_base_url():
     cfg = AIConfig(
         provider=AIProvider.openrouter,
+        model="anthropic/claude-3.5",
         openrouter_api_key="sk-or-2",
         openrouter_base_url="https://example.test/v1",
     )
@@ -74,9 +80,9 @@ def test_build_session_kwargs_openrouter_custom_base_url():
 
 
 def test_build_provider_returns_copilot_provider():
-    provider = build_provider(AIConfig(github_token="github_pat_abc"), AIPermission.restricted)
+    provider = build_provider(_copilot(github_token="github_pat_abc"), AIPermission.restricted)
     assert isinstance(provider, CopilotProvider)
-    assert provider.model == "claude-opus-4.8"
+    assert provider.model == "a-copilot-model"
 
 
 def test_build_provider_openrouter_uses_configured_model():
@@ -89,14 +95,33 @@ def test_build_provider_openrouter_uses_configured_model():
 
 
 def test_build_provider_threads_permission():
-    provider = build_provider(AIConfig(github_token="github_pat_abc"), AIPermission.full)
+    provider = build_provider(_copilot(github_token="github_pat_abc"), AIPermission.full)
     assert isinstance(provider, CopilotProvider)
     assert provider._permission is AIPermission.full
 
 
 def test_build_provider_missing_copilot_credential():
     with pytest.raises(AIConfigError, match="Copilot"):
+        build_provider(_copilot(), AIPermission.restricted)
+
+
+def test_build_provider_unconfigured_backend():
+    with pytest.raises(AIConfigError, match=r"provider and model are unset") as exc:
         build_provider(AIConfig(), AIPermission.restricted)
+    # The message must tell the user how to fix it and where to read more.
+    assert "startriage config set --ai-provider" in str(exc.value)
+    assert "--ai-model" in str(exc.value)
+    assert "github.com/ubuntu/startriage#configuring-the-ai-backend" in str(exc.value)
+
+
+def test_build_provider_missing_model_only():
+    with pytest.raises(AIConfigError, match=r"\[ai\] model is unset"):
+        build_provider(AIConfig(provider=AIProvider.copilot), AIPermission.restricted)
+
+
+def test_copilot_provider_rejects_missing_model():
+    with pytest.raises(AIConfigError):
+        CopilotProvider(AIConfig(provider=AIProvider.copilot), AIPermission.restricted)
 
 
 def test_build_provider_missing_openrouter_credential():

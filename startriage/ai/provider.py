@@ -19,7 +19,7 @@ import logging
 from abc import ABC, abstractmethod
 from typing import Any
 
-from ..config import AIConfig
+from ..config import AI_SETUP_HINT, AIConfig, AIConfigError
 from ..enums import AIPermission, AIProvider
 
 logger = logging.getLogger(__name__)
@@ -102,6 +102,8 @@ class CopilotProvider(Provider):
     """
 
     def __init__(self, ai_config: AIConfig, permission: AIPermission) -> None:
+        if not ai_config.model:
+            raise AIConfigError(AI_SETUP_HINT)
         self._ai_config = ai_config
         self._permission = permission
         self.model = ai_config.model
@@ -205,14 +207,15 @@ def build_permission_handler(permission: AIPermission) -> Any:
 
 
 def build_provider(ai_config: AIConfig, permission: AIPermission) -> Provider:
-    """Return a ready provider for ``ai_config``, validating credentials first.
+    """Return a ready provider for ``ai_config``, validating the backend first.
 
-    The credential check lives on :class:`AIConfig` as a context-gated model
+    The readiness check lives on :class:`AIConfig` as a context-gated model
     validator; re-validating here with ``require_ai`` context runs it at the AI
-    entry point, raising :class:`~startriage.config.AIConfigError` when the active
-    provider has no usable credential (from config or env) so misconfig fails
-    before any session is started. ``permission`` decides how the agent's tool
-    calls are handled at run time (see :func:`build_permission_handler`).
+    entry point, raising :class:`~startriage.config.AIConfigError` when no
+    provider/model has been chosen, or when the active provider has no usable
+    credential (from config or env), so misconfig fails before any session is
+    started. ``permission`` decides how the agent's tool calls are handled at run
+    time (see :func:`build_permission_handler`).
     """
     AIConfig.model_validate(ai_config.model_dump(), context={"require_ai": True})
     return CopilotProvider(ai_config, permission)
