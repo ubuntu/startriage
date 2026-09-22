@@ -10,8 +10,9 @@ lp_triage_updates = "theirs"
 
 [ai]
 # AI-assisted triage backend (see 'startriage config set --help').
-#provider = "copilot"                            # "copilot" | "openrouter"
-#model = "claude-opus-4.8"                        # copilot default; set your own for openrouter
+# provider and model have no default, --ai needs both.
+#provider = "copilot"                             # "copilot" | "openrouter"
+#model = "claude-opus-4.8"                        # the provider's model id
 #github_token = "github_pat_..."                  # or COPILOT_GITHUB_TOKEN / GH_TOKEN env
 #openrouter_api_key = "..."                       # or OPENROUTER_API_KEY env
 #openrouter_base_url = "https://openrouter.ai/api/v1"

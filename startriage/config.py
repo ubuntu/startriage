@@ -25,7 +25,7 @@ class UpdateFilter(StrEnum):
 class AIProvider(StrEnum):
     """LLM backend used for agentic triage."""
 
-    copilot = "copilot"  # GitHub Copilot SDK (default); GitHub token auth
+    copilot = "copilot"  # GitHub Copilot SDK; GitHub token auth
     openrouter = "openrouter"  # OpenAI-compatible BYOK endpoint
 
 
@@ -53,15 +53,33 @@ def _first_env(names: tuple[str, ...]) -> str | None:
     return None
 
 
+# There is deliberately no default provider/model: models differ in cost and
+# quality, so the user has to pick one knowingly.
+AI_SETUP_HINT = f"""\
+Choose one of the supported providers ({", ".join(AIProvider)}) and a model id:
+
+  # GitHub Copilot (needs a Copilot-enabled GitHub account)
+  startriage config set --ai-provider copilot --ai-model <model>
+
+  # OpenRouter (bring your own key)
+  startriage config set --ai-provider openrouter --ai-model <model>
+
+The model id is passed to the provider as is, look it up at:
+
+  https://docs.github.com/copilot/reference/ai-models/supported-models
+  https://openrouter.ai/models"""
+
+
 class AIConfigError(Exception):
-    """Raised when the [ai] section lacks the credentials required to run."""
+    """Raised when the [ai] section is not ready to run an AI session."""
 
 
 class AIConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    provider: AIProvider = AIProvider.copilot
-    model: str = "claude-opus-4.8"
+    # No defaults on purpose — see AI_SETUP_HINT.
+    provider: AIProvider | None = None
+    model: str | None = None
     # Copilot auth (or rely on COPILOT_GITHUB_TOKEN / GH_TOKEN / GITHUB_TOKEN env).
     github_token: str | None = None
     # OpenRouter (BYOK) auth.
@@ -71,25 +89,35 @@ class AIConfig(BaseModel):
     def resolve_token(self) -> str | None:
         """Return the effective credential for the active provider.
 
-        Config values take precedence over environment variables.
+        Config values take precedence over environment variables. Returns ``None``
+        when no provider has been chosen yet.
         """
-        if self.provider is AIProvider.copilot:
-            return self.github_token or _first_env(COPILOT_TOKEN_ENV_VARS)
-        return self.openrouter_api_key or _first_env(OPENROUTER_KEY_ENV_VARS)
+        match self.provider:
+            case AIProvider.copilot:
+                return self.github_token or _first_env(COPILOT_TOKEN_ENV_VARS)
+            case AIProvider.openrouter:
+                return self.openrouter_api_key or _first_env(OPENROUTER_KEY_ENV_VARS)
+            case _:
+                return None
 
     @model_validator(mode="after")
-    def check_token(self, info: ValidationInfo) -> Self:
-        """Validate that a usable credential exists — but only when AI is requested.
+    def check_ai_ready(self, info: ValidationInfo) -> Self:
+        """Validate provider, model and credentials — but only when AI is requested.
 
         The ``[ai]`` section is optional so non-AI commands (plain ``triage``,
-        ``todo``) run without any credential. Ordinary ``load_config`` validation
+        ``todo``) run without any of it. Ordinary ``load_config`` validation
         therefore skips this check; the AI entry point re-validates with
-        ``context={"require_ai": True}`` so a misconfigured provider fails before a
-        session starts. Raises :class:`AIConfigError` (propagated unwrapped by
-        pydantic, as it is not a ``ValueError``) with a friendly hint.
+        ``context={"require_ai": True}`` so an unconfigured or misconfigured
+        provider fails before a session starts. Raises :class:`AIConfigError`
+        (propagated unwrapped by pydantic, as it is not a ``ValueError``), which
+        the CLI turns into a plain error message.
         """
         if not (info.context and info.context.get("require_ai")):
             return self
+
+        if not (self.provider and self.model):
+            raise AIConfigError(f"--ai needs [ai] provider and model to be set.\n\n{AI_SETUP_HINT}")
+
         if self.resolve_token() is not None:
             return self
         match self.provider:
