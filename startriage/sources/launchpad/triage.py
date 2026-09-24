@@ -65,6 +65,14 @@ class LaunchpadTriage(TriageResult):
                 case _:
                     raise NotImplementedError(f"{self.mode!r}")
 
+        # In todo mode, unassigned tasks get their own section after the main list.
+        unassigned: list[Task] = []
+        tasks = self.tasks.tasks
+        if self.mode == FetchMode.todo:
+            unassigned = [t for t in tasks if not t.all_assignees]
+            if unassigned:
+                tasks = [t for t in tasks if t.all_assignees]
+
         bug_count = len({t.number for t in self.tasks.tasks})
 
         match cfg.fmt:
@@ -85,7 +93,9 @@ class LaunchpadTriage(TriageResult):
             case _:
                 raise NotImplementedError
 
-        if bug_count == 0:
+        former_bugs = cfg.bug_persistor.former_bugs("launchpad") if cfg.bug_persistor else None
+
+        if bug_count == 0 and not self.tasks.freezer_tasks and not unassigned and not former_bugs:
             return
 
         ctx = RenderContext(
@@ -95,34 +105,39 @@ class LaunchpadTriage(TriageResult):
             recent_since=self.filter.recent_since,
             old_since=self.filter.old_since,
         )
-        await _print_bugs(
-            self.tasks.lp,
-            self.tasks.tasks,
-            ctx,
-            cfg,
-            extended,
-            order_by_date=(self.mode == FetchMode.subscribed),
+
+        reported: set[str] = set(
+            await _print_bugs(
+                tasks,
+                ctx,
+                cfg,
+                extended,
+                order_by_date=(self.mode == FetchMode.subscribed),
+                former_bugs=former_bugs,
+            )
         )
 
-        if self.mode == FetchMode.todo and self.tasks.freezer_tasks:
-            freezer_count = len({t.number for t in self.tasks.freezer_tasks})
-            plural = "item" if freezer_count == 1 else "items"
-            print(
-                f"### Freezer ({freezer_count} {plural}, tag={self.team_config.lp_freezer_tag})",
-                file=cfg.out,
-            )
-            await _print_bugs(
-                self.tasks.lp,
-                self.tasks.freezer_tasks,
-                ctx,
-                dataclasses.replace(cfg, bug_persistor=None),
-                extended,
-                order_by_date=True,
-            )
+        if self.mode == FetchMode.todo:
+            # subsections don't flag new bugs against the compare file
+            sub_cfg = dataclasses.replace(cfg, bug_persistor=None)
+
+            if self.tasks.freezer_tasks:
+                _print_section_header(
+                    "Freezer",
+                    self.tasks.freezer_tasks,
+                    cfg,
+                    extra=f"tag={self.team_config.lp_freezer_tag}",
+                )
+                reported.update(
+                    await _print_bugs(self.tasks.freezer_tasks, ctx, sub_cfg, extended, order_by_date=True)
+                )
+
+            if unassigned:
+                _print_section_header("Unassigned", unassigned, cfg)
+                reported.update(await _print_bugs(unassigned, ctx, sub_cfg, extended))
 
         if self.mode == FetchMode.triage and self.filter.show_expiration:
             await _print_old_bugs(
-                self.tasks.lp,
                 self.tasks.expiring_tagged,
                 self.tasks.expiring_subscribed,
                 ctx,
@@ -131,8 +146,23 @@ class LaunchpadTriage(TriageResult):
                 extended,
             )
 
+        # bugs from the compare file that no section listed anymore
+        if former_bugs and cfg.bug_persistor:
+            closed = sorted(number for number in former_bugs if number not in reported)
+            print(f"\nBugs gone compared with {cfg.bug_persistor.compare_str}:", file=cfg.out)
+            await _print_bugs(
+                _bugs_to_tasks(closed, self.tasks.lp),
+                ctx,
+                dataclasses.replace(cfg, open_in_browser=False, bug_persistor=None),
+                extended,
+                is_sorted=True,
+            )
+
     async def record(self, persistor: BugPersistor) -> None:
         ids = {t.number for t in self.tasks.tasks}
+        # freezer bugs are still watched -- record them so they don't
+        # surface as "gone" in the next comparison
+        ids.update(t.number for t in self.tasks.freezer_tasks)
         persistor.record("launchpad", ids)
 
     def to_json(self) -> str:
@@ -147,7 +177,6 @@ class LaunchpadTriage(TriageResult):
 
 
 async def _print_bugs(
-    lp: Launchpad,
     tasks: list[Task],
     ctx: RenderContext,
     cfg: OutputConfig,
@@ -155,10 +184,13 @@ async def _print_bugs(
     order_by_date: bool = False,
     is_sorted: bool = False,
     former_bugs: set[str] | None = None,
-) -> None:
+) -> list[str]:
+    """Render a list of bug tasks as a table; return the bug numbers shown.
 
-    if cfg.bug_persistor and former_bugs is None:
-        former_bugs = cfg.bug_persistor.former_bugs("launchpad")
+    Generic printer for any Launchpad task list (main, freezer, unassigned,
+    gone, expiring). Section headers and the gone-listing are the caller's
+    concern; *former_bugs* only controls the new-bug flag.
+    """
 
     if is_sorted:
         sorted_tasks = tasks
@@ -167,11 +199,11 @@ async def _print_bugs(
         sort_key = Task.sort_date if order_by_date else Task.sort_key
         sorted_tasks = sorted(tasks, key=sort_key, reverse=order_by_date)
 
-    bugid_len = max((len(t.number) for t in sorted_tasks), default=0)
-
     if not sorted_tasks:
         print(file=cfg.out)  # trailing newline for spacing after empty section
-        return
+        return []
+
+    bugid_len = max(len(t.number) for t in sorted_tasks)
 
     if cfg.fmt == OutputFormat.TERMINAL:
         print(Task.get_table_header(bugid_len, extended=extended), file=cfg.out)
@@ -184,7 +216,6 @@ async def _print_bugs(
     for task in sorted_tasks:
         groups[task.number].append(task)
 
-    reported: list[str] = []
     for number in ordered_numbers:
         group = sorted(groups[number], key=lambda t: t.actionability_rank(ctx))
         primary, further_tasks = group[0], group[1:]
@@ -217,8 +248,6 @@ async def _print_bugs(
             case _:
                 raise NotImplementedError
 
-        reported.append(number)
-
     if cfg.open_in_browser:
         for number in ordered_numbers:
             url = groups[number][0].url
@@ -228,19 +257,7 @@ async def _print_bugs(
     if cfg.fmt == OutputFormat.TERMINAL:
         print(file=cfg.out)  # blank line after bugs for visual separation
 
-        if former_bugs and cfg.bug_persistor:
-            closed = [x for x in former_bugs if x not in reported]
-            print(f"\nBugs gone compared with {cfg.bug_persistor.compare_str}:", file=cfg.out)
-            gone_cfg = dataclasses.replace(cfg, open_in_browser=False, bug_persistor=None)
-            await _print_bugs(
-                lp,
-                _bugs_to_tasks(closed, lp),
-                ctx,
-                gone_cfg,
-                extended,
-                is_sorted=True,
-                former_bugs=former_bugs,
-            )
+    return ordered_numbers
 
 
 def _bugs_to_tasks(bug_numbers: list[str], lp: Launchpad) -> list[Task]:
@@ -253,8 +270,14 @@ def _bugs_to_tasks(bug_numbers: list[str], lp: Launchpad) -> list[Task]:
     return tasks
 
 
+def _print_section_header(label: str, tasks: list[Task], cfg: OutputConfig, extra: str = "") -> None:
+    count = len({t.number for t in tasks})
+    plural = "item" if count == 1 else "items"
+    suffix = f", {extra}" if extra else ""
+    print(f"### {label} ({count} {plural}{suffix})", file=cfg.out)
+
+
 async def _print_old_bugs(
-    lp: Launchpad,
     expiring_tagged: list[Task],
     expiring_subscribed: list[Task],
     ctx: RenderContext,
@@ -281,18 +304,14 @@ async def _print_old_bugs(
                 if not exp_tasks:
                     continue
 
-                exp_count = len({t.number for t in exp_tasks})
                 print(file=out_cfg.out)
-                plural = "item" if exp_count == 1 else "items"
-                print(f"### {label} ({exp_count} {plural}, ~{days} days ago)", file=out_cfg.out)
-                await _print_bugs(lp, exp_tasks, ctx, out_cfg, extended, order_by_date=order_by_date)
+                _print_section_header(label, exp_tasks, out_cfg, extra=f"~{days} days ago")
+                await _print_bugs(exp_tasks, ctx, out_cfg, extended, order_by_date=order_by_date)
 
         case OutputFormat.MARKDOWN:
             exp_tasks = list(set(expiring_tagged) | set(expiring_subscribed))
-            exp_count = len({t.number for t in exp_tasks})
-            plural = "item" if exp_count == 1 else "items"
-            print(f"### Old {plural}", file=out_cfg.out)
-            await _print_bugs(lp, exp_tasks, ctx, out_cfg, extended, order_by_date=True)
+            _print_section_header("Old", exp_tasks, out_cfg)
+            await _print_bugs(exp_tasks, ctx, out_cfg, extended, order_by_date=True)
 
         case _:
             raise NotImplementedError
