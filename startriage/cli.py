@@ -10,6 +10,7 @@ from pathlib import Path
 
 from .config import (
     DEFAULT_USER_CONFIG,
+    AIConfigError,
     StarTriageConfig,
     load_config,
     resolve_team_name,
@@ -261,12 +262,14 @@ GREEN = done
     config_setdefaults_p.add_argument(
         "--ai-provider",
         choices=AIProvider,
-        help="Set AI triage provider in config (ai.provider)",
+        help="Set AI triage provider in config (ai.provider).",
     )
     config_setdefaults_p.add_argument(
         "--ai-model",
         metavar="MODEL",
-        help="Set AI triage model in config (ai.model)",
+        help=(
+            "Set AI triage model in config (ai.model)."
+        ),
     )
     config_setdefaults_p.add_argument(
         "--ai-github-token",
@@ -361,6 +364,9 @@ def main() -> None:
         asyncio.run(_run())
     except KeyboardInterrupt:
         sys.exit(130)
+    except AIConfigError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        sys.exit(2)
 
 
 async def _run() -> None:

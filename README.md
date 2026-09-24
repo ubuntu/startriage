@@ -68,6 +68,10 @@ required. Add `--ai` to run the agent, which produces a suggested status, tags,
 analysis, and (where applicable) a proposed fix. The agent never edits bugs and
 never applies patches — it only prints its analysis.
 
+`--ai` needs a provider, a model and credentials — see
+[Configuring the AI backend](#configuring-the-ai-backend) below. You should set
+these before running `analyze` or `triage` with `--ai`.
+
 `--ai` requires a permission level that controls what the agent may run:
 
 - `restricted` — no tool execution; the agent reasons only over the bug metadata
@@ -100,23 +104,64 @@ The AI output is printed after the normal triage results. With `--markdown FILE`
 the AI section is folded into that same report file (behind a clear "review
 critically" notice) so you get a single cohesive document.
 
-Configure a provider first (credentials are written to the 0600 config, never
-echoed):
+### Configuring the AI backend
+
+**There is no default provider and no default model.** `--ai` fails with setup
+instructions until you choose both. The supported providers are:
+
+| `ai.provider` | What it is | Credential |
+| --- | --- | --- |
+| `copilot` | GitHub Copilot, via the bundled Copilot CLI | GitHub token with Copilot enabled |
+| `openrouter` | Any OpenAI-compatible endpoint (BYOK), defaulting to OpenRouter | OpenRouter API key |
+
+`ai.model` is passed through to the provider, so use the exact model ID it
+publishes — startriage does not validate it or map it between providers. Look
+the id up in
+[GitHub Copilot's model documentation](https://docs.github.com/copilot) or on
+[openrouter.ai/models](https://openrouter.ai/models).
+
+Credentials are written to the 0600 config file and never echoed:
 
 ```bash
-# Default provider: GitHub Copilot (needs a Copilot-enabled account)
-startriage config set --ai-provider copilot --ai-github-token github_pat_...
+# GitHub Copilot (needs a Copilot-enabled account)
+startriage config set --ai-provider copilot \
+    --ai-model <copilot-model-id> \
+    --ai-github-token github_pat_...
 
 # Or bring your own key via an OpenAI-compatible provider (e.g. OpenRouter)
 startriage config set --ai-provider openrouter \
-    --ai-model anthropic/claude-opus-4.1 \
+    --ai-model <openrouter-model-id> \
     --ai-openrouter-key sk-or-...
 ```
 
+Equivalently, in your user config file:
+
+```toml
+[ai]
+provider = "copilot"                  # "copilot" | "openrouter" — required
+model = "claude-opus-4.8"             # required; your provider's model id
+#github_token = "github_pat_..."      # or COPILOT_GITHUB_TOKEN / GH_TOKEN env
+#openrouter_api_key = "sk-or-..."     # or OPENROUTER_API_KEY env
+#openrouter_base_url = "https://openrouter.ai/api/v1"   # any OpenAI-compatible endpoint
+```
+
+> **Upgrading?** Earlier versions defaulted to `provider = "copilot"` and
+> `model = "claude-opus-4.8"` without telling you. If `--ai` now fails with a
+> setup message, put those two values in your config to get the previous
+> behaviour back:
+>
+> ```bash
+> startriage config set --ai-provider copilot --ai-model claude-opus-4.8
+> ```
+
 The Copilot token may also come from `COPILOT_GITHUB_TOKEN` / `GH_TOKEN` /
-`GITHUB_TOKEN`, and the OpenRouter key from `OPENROUTER_API_KEY`. The snap bundles
-the Copilot runtime and `ubuntu-dev-tools`, so source analysis works inside strict
-confinement; from a git checkout install the extra with `uv sync --extra ai`.
+`GITHUB_TOKEN`, and the OpenRouter key from `OPENROUTER_API_KEY`; values in the
+config file win over the environment. Check what is in effect with
+`startriage config show`.
+
+The snap bundles the Copilot runtime and `ubuntu-dev-tools`, so source analysis
+works inside strict confinement; from a git checkout install the extra with
+`uv sync --extra ai`.
 
 ## Configuration
 

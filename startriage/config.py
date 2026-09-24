@@ -39,43 +39,111 @@ def _first_env(names: tuple[str, ...]) -> str | None:
     return None
 
 
+# Where the CLI sends users who need to set up (or fix) the [ai] section.
+AI_DOCS_URL = "https://github.com/ubuntu/startriage#configuring-the-ai-backend"
+
+# Shown whenever the [ai] section is incomplete. There is deliberately no default
+# provider/model: an explicit choice is required before any session starts.
+AI_SETUP_HINT = f"""\
+startriage has no default AI provider or model. Please set your config with
+one of the supported providers ( {", ".join(p.value for p in AIProvider)} )
+and a model id.:
+
+  # GitHub Copilot (needs a Copilot-enabled GitHub account)
+  startriage config set --ai-provider copilot --ai-model <model>
+
+  # OpenRouter (bring your own key)
+  startriage config set --ai-provider openrouter --ai-model <model>
+
+Model ids are not mapped or validated, so use the id your provider publishes:
+see https://docs.github.com/copilot for Copilot, or
+https://openrouter.ai/models for OpenRouter.
+
+Full setup instructions: {AI_DOCS_URL}"""
+
+
 class AIConfigError(Exception):
-    """Raised when the [ai] section lacks the credentials required to run."""
+    """Raised when the [ai] section is not ready to run an AI session."""
 
 
 class AIConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    provider: AIProvider = AIProvider.copilot
-    model: str = "claude-opus-4.8"
+    # No defaults on purpose — see AI_SETUP_HINT.
+    provider: AIProvider | None = None
+    model: str | None = None
     # Copilot auth (or rely on COPILOT_GITHUB_TOKEN / GH_TOKEN / GITHUB_TOKEN env).
     github_token: str | None = None
     # OpenRouter (BYOK) auth.
     openrouter_api_key: str | None = None
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
 
+    @field_validator("provider", mode="before")
+    @classmethod
+    def check_provider(cls, v: object) -> object:
+        """Reject empty or unknown providers with a readable message.
+
+        Runs on every config load, so a typo in ``[ai] provider`` is reported the
+        first time startriage starts rather than at the first ``--ai`` run.
+        """
+        if v is None or isinstance(v, AIProvider):
+            return v
+        if isinstance(v, str):
+            v = v.strip()
+            if not v:
+                raise AIConfigError(f"[ai] provider must not be empty.\n\n{AI_SETUP_HINT}")
+        try:
+            return AIProvider(v)
+        except ValueError:
+            raise AIConfigError(f"Unsupported AI provider {v!r}.\n\n{AI_SETUP_HINT}") from None
+
+    @field_validator("model", mode="before")
+    @classmethod
+    def check_model(cls, v: object) -> object:
+        """Reject an explicitly empty model and normalize surrounding whitespace."""
+        if v is None or not isinstance(v, str):
+            return v
+        model = v.strip()
+        if not model:
+            raise AIConfigError(f"[ai] model must not be empty.\n\n{AI_SETUP_HINT}")
+        return model
+
     def resolve_token(self) -> str | None:
         """Return the effective credential for the active provider.
 
-        Config values take precedence over environment variables.
+        Config values take precedence over environment variables. Returns ``None``
+        when no provider has been chosen yet.
         """
-        if self.provider is AIProvider.copilot:
-            return self.github_token or _first_env(COPILOT_TOKEN_ENV_VARS)
-        return self.openrouter_api_key or _first_env(OPENROUTER_KEY_ENV_VARS)
+        match self.provider:
+            case AIProvider.copilot:
+                return self.github_token or _first_env(COPILOT_TOKEN_ENV_VARS)
+            case AIProvider.openrouter:
+                return self.openrouter_api_key or _first_env(OPENROUTER_KEY_ENV_VARS)
+            case _:
+                return None
 
     @model_validator(mode="after")
-    def check_token(self, info: ValidationInfo) -> Self:
-        """Validate that a usable credential exists — but only when AI is requested.
+    def check_ai_ready(self, info: ValidationInfo) -> Self:
+        """Validate provider, model and credentials — but only when AI is requested.
 
         The ``[ai]`` section is optional so non-AI commands (plain ``triage``,
-        ``todo``) run without any credential. Ordinary ``load_config`` validation
+        ``todo``) run without any of it. Ordinary ``load_config`` validation
         therefore skips this check; the AI entry point re-validates with
-        ``context={"require_ai": True}`` so a misconfigured provider fails before a
-        session starts. Raises :class:`AIConfigError` (propagated unwrapped by
-        pydantic, as it is not a ``ValueError``) with a friendly hint.
+        ``context={"require_ai": True}`` so an unconfigured or misconfigured
+        provider fails before a session starts. Raises :class:`AIConfigError`
+        (propagated unwrapped by pydantic, as it is not a ``ValueError``), which
+        the CLI turns into a plain error message.
         """
         if not (info.context and info.context.get("require_ai")):
             return self
+
+        missing = [name for name, value in (("provider", self.provider), ("model", self.model)) if not value]
+        if missing:
+            raise AIConfigError(
+                f"--ai needs an AI backend configured, but [ai] {' and '.join(missing)} "
+                f"{'is' if len(missing) == 1 else 'are'} unset.\n\n{AI_SETUP_HINT}"
+            )
+
         if self.resolve_token() is not None:
             return self
         match self.provider:
@@ -83,13 +151,13 @@ class AIConfig(BaseModel):
                 raise AIConfigError(
                     "No Copilot credential configured. Run "
                     "'startriage config set --ai-github-token <token>' or set the "
-                    "COPILOT_GITHUB_TOKEN environment variable."
+                    f"COPILOT_GITHUB_TOKEN environment variable.\n\nSee {AI_DOCS_URL}"
                 )
             case AIProvider.openrouter:
                 raise AIConfigError(
                     "No OpenRouter API key configured. Run "
                     "'startriage config set --ai-openrouter-key <key>' or set the "
-                    "OPENROUTER_API_KEY environment variable."
+                    f"OPENROUTER_API_KEY environment variable.\n\nSee {AI_DOCS_URL}"
                 )
             case _:
                 raise RuntimeError("unhandled provider")
