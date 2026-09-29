@@ -33,6 +33,12 @@ apps:
       # The Copilot runtime defaults COPILOT_HOME to ~/.copilot, a hidden path the
       # `home` plug cannot write to. Point it at SNAP_USER_DATA, always writable.
       COPILOT_HOME: $SNAP_USER_DATA/.copilot
+      # snapd rewrites HOME but passes the user's XDG_* through; if they point into the
+      # real ~/.local or ~/.config, the `home` plug denies access to those hidden dirs.
+      XDG_CONFIG_HOME: $SNAP_USER_DATA/.config
+      XDG_DATA_HOME: $SNAP_USER_DATA/.local/share
+      XDG_STATE_HOME: $SNAP_USER_DATA/.local/state
+      XDG_CACHE_HOME: $SNAP_USER_DATA/.cache
       # Expose staged ubuntu-dev-tools helpers (pull-lp-source, debdiff, …) on PATH
       # so the agent's shell tool can pull and diff package source.
       PATH: $SNAP/usr/bin:$SNAP/bin:$PATH
