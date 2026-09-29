@@ -7,11 +7,11 @@ import io
 import logging
 import sys
 import traceback
-from datetime import time
+from datetime import datetime, time, timedelta, timezone
 
-from .config import StarTriageConfig
-from .dates import compact_date_range, reverse_triage_task_day
-from .enums import FetchMode
+from .config import StarTriageConfig, resolve_team_name
+from .dates import compact_date_range, parse_interval, reverse_triage_task_day, triage_task_date_range
+from .enums import FetchMode, UpdateFilter
 from .output import FailedTriageResult, OutputConfig, OutputFormat, TriageResult
 from .source import TaskFilterOptions, TriageSource
 from .sources.discourse.triage import find as discourse_find
@@ -43,6 +43,70 @@ def resolve_sources(
     if source_filter is not None:
         result = {s for s in result if s.name in source_filter}
     return frozenset(result)
+
+
+def build_filter(
+    config: StarTriageConfig,
+    team: str | None = None,
+    interval: str | None = None,
+    triage_day: str | None = None,
+    sources: str | None = None,
+    source_filter: set[str] | None = None,
+    flag_recent: int = 7,
+    flag_old: int = 30,
+    show_expiration: bool = True,
+    update_filter: UpdateFilter | None = None,
+) -> TaskFilterOptions:
+    """Build filter options from CLI-style values; see ``startriage triage --help`` for their meaning."""
+    if interval and triage_day:
+        raise ValueError("interval and triage_day are mutually exclusive")
+
+    if interval:
+        start, end = parse_interval(interval)
+    else:
+        start, end = triage_task_date_range(triage_day)
+
+    now = datetime.now(timezone.utc)
+
+    return TaskFilterOptions(
+        team=resolve_team_name(team, config),
+        start=start,
+        end=end,
+        recent_since=now - timedelta(days=flag_recent),
+        old_since=now - timedelta(days=flag_old),
+        sources=resolve_sources(sources, source_filter),
+        show_expiration=show_expiration,
+        update_filter=update_filter,
+    )
+
+
+async def fetch(
+    config: StarTriageConfig, opts: TaskFilterOptions, mode: FetchMode = FetchMode.triage
+) -> dict[str, TriageResult]:
+    """Fetch all sources in *opts* concurrently without rendering anything.
+
+    Entry point for library use. Sources whose fetch raised come back as
+    ``FailedTriageResult`` with ``.error`` set. Launchpad ``Task`` properties
+    may still query Launchpad synchronously on access, so call them off the
+    event loop (``asyncio.to_thread``).
+    """
+    fetch_tasks = _start_fetches(config, opts, mode)
+    return dict(zip(fetch_tasks, await asyncio.gather(*fetch_tasks.values()), strict=True))
+
+
+def _start_fetches(
+    config: StarTriageConfig, opts: TaskFilterOptions, mode: FetchMode
+) -> dict[str, asyncio.Task[TriageResult]]:
+    return {s.name: asyncio.create_task(_guarded_find(s, config, opts, mode)) for s in opts.sources}
+
+
+async def _guarded_find(
+    source: TriageSource, config: StarTriageConfig, opts: TaskFilterOptions, mode: FetchMode
+) -> TriageResult:
+    try:
+        return await source.find(config, opts, mode)
+    except Exception as exc:
+        return FailedTriageResult(exc)
 
 
 async def run_triage(
@@ -95,11 +159,7 @@ async def run_triage(
             case _:
                 raise NotImplementedError
 
-    fetch_tasks: dict[str, asyncio.Task[TriageResult]] = {}
-    for source in opts.sources:
-        fetch_tasks[source.name] = asyncio.create_task(source.find(config, opts, FetchMode.triage))
-
-    results = await _render_sections(output_cfg, fetch_tasks)
+    results = await _render_sections(output_cfg, _start_fetches(config, opts, FetchMode.triage))
 
     # create markdown template
     if output_cfg.markdown_path:
@@ -149,11 +209,7 @@ async def run_todo(
     if output_cfg.fmt == OutputFormat.TERMINAL:
         print(f"bug housekeeping for team {filter.team!r}\n")
 
-    fetch_tasks: dict[str, asyncio.Task[TriageResult]] = {}
-    for source in filter.sources:
-        fetch_tasks[source.name] = asyncio.create_task(source.find(config, filter, mode))
-
-    results = await _render_sections(output_cfg, fetch_tasks)
+    results = await _render_sections(output_cfg, _start_fetches(config, filter, mode))
 
     if output_cfg.bug_persistor is not None:
         for _, result in results:
@@ -200,13 +256,11 @@ async def _render_sections(
 async def _await_and_print(
     output_cfg: OutputConfig, source: str, task: asyncio.Task, spinner: Spinner
 ) -> tuple[str, TriageResult]:
-    try:
-        result: TriageResult = await task
-    except Exception as exc:
-        spinner.done(source)
-        return source, FailedTriageResult(exc)
-
+    result: TriageResult = await task
     spinner.done(source)
+    if result.error is not None:
+        return source, result
+
     spinner.clear()
     spinner.suspend()  # prevent spinner redraws while section output is in progress
     try:

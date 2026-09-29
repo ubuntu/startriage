@@ -5,24 +5,21 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from .config import (
     DEFAULT_USER_CONFIG,
     StarTriageConfig,
     load_config,
-    resolve_team_name,
     update_user_config,
 )
-from .dates import parse_interval, triage_task_date_range
 from .enums import AIPermission, AIProvider, UpdateFilter
 from .log import log_setup
 from .output import OutputConfig, OutputFormat
 from .savebugs import BugPersistor, SaveConfig
 from .source import TaskFilterOptions
 from .sources.github.auth import _run_github_login
-from .triage import SOURCES, print_fetch_errors, resolve_sources, run_todo, run_triage
+from .triage import SOURCES, build_filter, print_fetch_errors, run_todo, run_triage
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -321,27 +318,17 @@ def _bool_flag(value: str) -> bool:
 def _filter_from_args(
     config: StarTriageConfig, args: argparse.Namespace, source_filter: set[str] | None = None
 ) -> TaskFilterOptions:
-    # mutually exclusive options in parser
-    if args.interval:
-        start, end = parse_interval(args.interval)
-    else:
-        start, end = triage_task_date_range(args.triage_day)
-
-    recent_since: datetime = datetime.now(timezone.utc) - timedelta(days=args.flag_recent)
-    old_since: datetime = datetime.now(timezone.utc) - timedelta(days=args.flag_old)
-    team_name = resolve_team_name(args.team, config)
-
-    update_filter = getattr(args, "update", None)  # only for triage command
-
-    return TaskFilterOptions(
-        team=team_name,
-        start=start,
-        end=end,
-        recent_since=recent_since,
-        old_since=old_since,
-        sources=resolve_sources(args.source, source_filter),
+    return build_filter(
+        config,
+        team=args.team,
+        interval=args.interval,
+        triage_day=args.triage_day,
+        sources=args.source,
+        source_filter=source_filter,
+        flag_recent=args.flag_recent,
+        flag_old=args.flag_old,
         show_expiration=not getattr(args, "no_expiration", False),
-        update_filter=update_filter,
+        update_filter=getattr(args, "update", None),  # only for triage command
     )
 
 
