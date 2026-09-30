@@ -17,10 +17,19 @@ from __future__ import annotations
 import asyncio
 import logging
 from abc import ABC, abstractmethod
+from enum import StrEnum
 from typing import Any
 
-from ..config import AIConfig
-from ..enums import AIPermission, AIProvider
+from ..config import AIConfig, AIProvider
+
+
+class AIPermission(StrEnum):
+    """How much the triage agent is allowed to execute on the host."""
+
+    restricted = "restricted"  # no tool execution; reason over the provided metadata only
+    full = "full"  # auto-approve every tool call (shell, file, web)
+    ask = "ask"  # prompt on the terminal before each tool call
+
 
 logger = logging.getLogger(__name__)
 

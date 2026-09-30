@@ -7,13 +7,15 @@ import asyncio
 import sys
 from pathlib import Path
 
+from .ai.provider import AIPermission
 from .config import (
     DEFAULT_USER_CONFIG,
+    AIProvider,
     StarTriageConfig,
+    UpdateFilter,
     load_config,
     update_user_config,
 )
-from .enums import AIPermission, AIProvider, UpdateFilter
 from .log import log_setup
 from .output import OutputConfig, OutputFormat
 from .report import print_fetch_errors, todo, triage

@@ -8,9 +8,8 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from startriage.config import load_config
-from startriage.enums import FetchMode
 from startriage.output import OutputConfig, OutputFormat
-from startriage.source import TaskFilterOptions
+from startriage.source import FetchMode, TaskFilterOptions
 from startriage.sources.proposed.models import ProposedMigrationData
 from startriage.sources.proposed.triage import ProposedMigrationTriage, find
 

@@ -14,9 +14,8 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-from ..enums import ProposedFixKind
 from .agent import BugOutcome
-from .contract import AgentResult, ProposedFix
+from .contract import AgentResult, ProposedFix, ProposedFixKind
 
 #: Heading + notice prepended when an AI report is appended to a triage markdown
 #: file, to keep the AI-generated content clearly separated from the human report.

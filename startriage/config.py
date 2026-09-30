@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import tomllib
+from enum import StrEnum
 from importlib.resources import files
 from importlib.resources.abc import Traversable
 from pathlib import Path
@@ -12,7 +13,20 @@ from typing import Self
 import tomli_w
 from pydantic import BaseModel, ConfigDict, ValidationInfo, field_validator, model_validator
 
-from .enums import AIProvider, UpdateFilter
+
+class UpdateFilter(StrEnum):
+    """Controls which bugs are shown based on who last acted on them."""
+
+    theirs = "theirs"  # show only bugs where non-team member acted last
+    ours = "ours"  # show only bugs where team member acted last
+    all = "all"  # show all bugs regardless of last actor
+
+
+class AIProvider(StrEnum):
+    """LLM backend used for agentic triage."""
+
+    copilot = "copilot"  # GitHub Copilot SDK (default); GitHub token auth
+    openrouter = "openrouter"  # OpenAI-compatible BYOK endpoint
 
 
 def default_config_path() -> Path:

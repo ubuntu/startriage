@@ -15,7 +15,7 @@ from startriage.ai import (
     parse_agent_result,
     triage_bugs,
 )
-from startriage.enums import ProposedFixKind, TriageStatus
+from startriage.ai.contract import ProposedFixKind, TriageStatus
 
 _VALID_RESULT = {
     "bug": "123",

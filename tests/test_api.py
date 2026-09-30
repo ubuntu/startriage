@@ -9,10 +9,9 @@ from datetime import datetime, timezone
 import pytest
 
 from startriage.config import load_config
-from startriage.enums import FetchMode
 from startriage.output import FailedTriageResult, OutputConfig, OutputFormat, TriageResult, json_default
 from startriage.report import triage
-from startriage.source import TriageSource
+from startriage.source import FetchMode, TriageSource
 from startriage.sources.discourse.finder import DiscourseFinder
 from startriage.sources.discourse.models import DiscoursePost, DiscourseTopic
 from startriage.sources.discourse.triage import PostStatus, _topic_activity

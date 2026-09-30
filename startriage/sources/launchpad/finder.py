@@ -21,7 +21,7 @@ from lazr.restfulclient.errors import ClientError
 from startriage.source import TaskFilterOptions
 
 from ...config import TeamConfig
-from ...enums import FetchMode
+from ...source import FetchMode
 from .models import LaunchpadTasks, Task
 
 logger = logging.getLogger(__name__)

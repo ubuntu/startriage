@@ -12,8 +12,8 @@ from startriage.ai import (
     render_bug_metadata,
     render_report,
 )
+from startriage.ai.contract import ProposedFixKind, TriageStatus
 from startriage.ai.render import AI_APPEND_NOTICE, _render_proposed_fix
-from startriage.enums import ProposedFixKind, TriageStatus
 
 _DAY = date(2026, 6, 15)
 

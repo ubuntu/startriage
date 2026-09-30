@@ -9,10 +9,9 @@ from typing import Any
 import aiohttp
 
 from ...config import StarTriageConfig
-from ...enums import FetchMode
 from ...output import OutputConfig, OutputFormat, TriageResult, hyperlink, truncate_string
 from ...savebugs import BugPersistor
-from ...source import TaskFilterOptions
+from ...source import FetchMode, TaskFilterOptions
 from .finder import fetch_proposed_migration
 from .models import MigrationExcuse, ProposedMigrationData
 

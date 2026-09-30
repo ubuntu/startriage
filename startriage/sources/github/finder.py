@@ -9,7 +9,7 @@ from datetime import datetime
 
 import aiohttp
 
-from startriage.enums import FetchMode
+from startriage.source import FetchMode
 
 from .auth import GitHubRateLimitError
 from .models import Issue, PullRequest, Repo, RepoResult

@@ -10,9 +10,9 @@ from startriage.ai import (
     payloads_from_tasks,
     run_agent_on_payloads,
 )
+from startriage.ai.provider import AIPermission
 from startriage.cli import _build_parser
 from startriage.config import StarTriageConfig
-from startriage.enums import AIPermission
 
 _CANNED = """Here is my analysis.
 

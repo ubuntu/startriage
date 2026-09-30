@@ -8,8 +8,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from startriage.config import AIConfig, AIConfigError, load_config, update_user_config
-from startriage.enums import AIProvider
+from startriage.config import AIConfig, AIConfigError, AIProvider, load_config, update_user_config
 
 
 def _write_toml(tmp_path: Path, content: str) -> Path:

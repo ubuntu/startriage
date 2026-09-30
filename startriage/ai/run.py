@@ -23,10 +23,9 @@ import re
 from typing import TYPE_CHECKING, Any
 
 from ..config import StarTriageConfig
-from ..enums import AIPermission
 from ..spinner import Spinner
 from .agent import load_system_prompt, triage_bugs
-from .provider import Provider, build_provider
+from .provider import AIPermission, Provider, build_provider
 from .render import render_bug_metadata, render_report
 
 if TYPE_CHECKING:

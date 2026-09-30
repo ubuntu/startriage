@@ -6,11 +6,10 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
 
-from .config import StarTriageConfig, resolve_team_name
+from .config import StarTriageConfig, UpdateFilter, resolve_team_name
 from .dates import parse_interval, triage_task_date_range
-from .enums import FetchMode, UpdateFilter
 from .output import FailedTriageResult, TriageResult
-from .source import TaskFilterOptions, TriageSource
+from .source import FetchMode, TaskFilterOptions, TriageSource
 from .sources.discourse.triage import find as discourse_find
 from .sources.github.triage import find as github_find
 from .sources.launchpad.triage import find as launchpad_find

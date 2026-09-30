@@ -13,10 +13,9 @@ from typing import Any
 import aiohttp
 
 from ...config import StarTriageConfig
-from ...enums import FetchMode
 from ...output import OutputConfig, OutputFormat, TriageResult, hyperlink
 from ...savebugs import BugPersistor
-from ...source import TaskFilterOptions
+from ...source import FetchMode, TaskFilterOptions
 from .finder import DiscourseFinder
 from .models import DiscoursePost, DiscourseTopic
 

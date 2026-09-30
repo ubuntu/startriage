@@ -15,7 +15,6 @@ from launchpadlib.launchpad import Launchpad
 from lazr.restfulclient.errors import ServerError
 
 from ...config import GeneralConfig, StarTriageConfig, TeamConfig
-from ...enums import FetchMode
 from ...output import (
     FailedTriageResult,
     OutputConfig,
@@ -25,7 +24,7 @@ from ...output import (
     truncate_string,
 )
 from ...savebugs import BugPersistor
-from ...source import TaskFilterOptions
+from ...source import FetchMode, TaskFilterOptions
 from .finder import connect_launchpad, fetch_bugs, fetch_changelogs
 from .models import LaunchpadTasks, RenderContext, Task
 

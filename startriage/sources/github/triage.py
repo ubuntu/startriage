@@ -12,10 +12,9 @@ from typing import Any
 import aiohttp
 
 from ...config import StarTriageConfig
-from ...enums import FetchMode
 from ...output import OutputConfig, OutputFormat, TriageResult, hyperlink, truncate_string
 from ...savebugs import BugPersistor
-from ...source import TaskFilterOptions
+from ...source import FetchMode, TaskFilterOptions
 from .auth import get_github_token
 from .finder import _make_headers, fetch_repos
 from .models import GithubItemEntry, GitHubItemType, RepoResult

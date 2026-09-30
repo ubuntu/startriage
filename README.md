@@ -180,7 +180,7 @@ Fetch structured results without rendering, e.g. for a web backend:
 
 ```python
 from startriage.config import load_config
-from startriage.enums import FetchMode
+from startriage.source import FetchMode
 from startriage.triage import build_filter, fetch
 
 config = load_config(None)  # or construct a StarTriageConfig directly

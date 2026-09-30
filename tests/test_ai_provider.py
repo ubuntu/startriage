@@ -12,8 +12,8 @@ from startriage.ai import (
     build_provider,
     build_session_kwargs,
 )
-from startriage.config import AIConfig, AIConfigError
-from startriage.enums import AIPermission, AIProvider
+from startriage.ai.provider import AIPermission
+from startriage.config import AIConfig, AIConfigError, AIProvider
 
 
 @pytest.fixture(autouse=True)

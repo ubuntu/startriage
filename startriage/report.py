@@ -12,9 +12,8 @@ from datetime import time
 
 from .config import StarTriageConfig
 from .dates import compact_date_range, reverse_triage_task_day
-from .enums import FetchMode
 from .output import OutputConfig, OutputFormat, TriageResult, json_default
-from .source import TaskFilterOptions
+from .source import FetchMode, TaskFilterOptions
 from .spinner import Spinner
 from .triage import fetch
 
