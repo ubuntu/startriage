@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+from dataclasses import replace
 from datetime import datetime, timezone
 
 import pytest
@@ -61,9 +62,7 @@ def test_build_filter_exclusive(config):
 async def test_fetch_captures_errors(config):
     ok = _proposed()
     opts = build_filter(config, interval="2026-09-28")
-    opts = type(opts)(
-        **{**opts.__dict__, "sources": frozenset({_source("ok", ok), _source("bad", KeyError("x"))})}
-    )
+    opts = replace(opts, sources=frozenset({_source("ok", ok), _source("bad", KeyError("x"))}))
 
     seen = []
 
@@ -81,7 +80,7 @@ async def test_fetch_captures_errors(config):
 @pytest.mark.asyncio
 async def test_render_json(config):
     opts = build_filter(config, interval="2026-09-28")
-    opts = type(opts)(**{**opts.__dict__, "sources": frozenset({_source("proposed", _proposed())})})
+    opts = replace(opts, sources=frozenset({_source("proposed", _proposed())}))
     out = io.StringIO()
 
     await triage(config, opts, OutputConfig(fmt=OutputFormat.JSON, out=out))
