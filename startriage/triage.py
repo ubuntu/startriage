@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 import logging
 import sys
 import traceback
@@ -12,7 +13,7 @@ from datetime import datetime, time, timedelta, timezone
 from .config import StarTriageConfig, resolve_team_name
 from .dates import compact_date_range, parse_interval, reverse_triage_task_day, triage_task_date_range
 from .enums import FetchMode, UpdateFilter
-from .output import FailedTriageResult, OutputConfig, OutputFormat, TriageResult
+from .output import FailedTriageResult, OutputConfig, OutputFormat, TriageResult, json_default
 from .source import TaskFilterOptions, TriageSource
 from .sources.discourse.triage import find as discourse_find
 from .sources.github.triage import find as github_find
@@ -156,6 +157,8 @@ async def run_triage(
                 print(file=output_cfg.out)
             case OutputFormat.MARKDOWN:
                 print(f"Items updated {range_verbose}\n", file=output_cfg.out)
+            case OutputFormat.JSON:
+                pass
             case _:
                 raise NotImplementedError
 
@@ -207,7 +210,7 @@ async def run_todo(
     mode = FetchMode.subscribed if subscribed else FetchMode.todo
 
     if output_cfg.fmt == OutputFormat.TERMINAL:
-        print(f"bug housekeeping for team {filter.team!r}\n")
+        print(f"bug housekeeping for team {filter.team!r}\n", file=output_cfg.out)
 
     results = await _render_sections(output_cfg, _start_fetches(config, filter, mode))
 
@@ -247,9 +250,16 @@ async def _render_sections(
     Reporting of fetch errors is left to the caller; see ``print_fetch_errors``.
     """
     async with Spinner(set(fetch_tasks.keys())) as spinner:
-        return await asyncio.gather(
+        results = await asyncio.gather(
             *[_await_and_print(output_cfg, source, task, spinner) for source, task in fetch_tasks.items()]
         )
+
+    if output_cfg.fmt == OutputFormat.JSON:
+        data = {source: await result.to_dict() for source, result in results}
+        json.dump(data, output_cfg.out, indent=2, default=json_default)
+        print(file=output_cfg.out)
+
+    return results
 
 
 # Print sections as each completes, so we don't have to wait for the slowest source
@@ -258,7 +268,7 @@ async def _await_and_print(
 ) -> tuple[str, TriageResult]:
     result: TriageResult = await task
     spinner.done(source)
-    if result.error is not None:
+    if result.error is not None or output_cfg.fmt == OutputFormat.JSON:
         return source, result
 
     spinner.clear()

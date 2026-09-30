@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 import aiohttp
 
@@ -169,6 +170,9 @@ class ProposedMigrationTriage(TriageResult):
 
     async def record(self, persistor: BugPersistor) -> None:
         pass  # proposed migration items are not LP bugs
+
+    async def to_dict(self) -> dict[str, Any]:
+        return {"teams": self.teams, "skipped_reason": self.skipped_reason, **asdict(self.data)}
 
 
 async def find(

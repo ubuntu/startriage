@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import os
 import sys
+import traceback
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from datetime import date
 from enum import StrEnum
 from functools import lru_cache
 from pathlib import Path
-from typing import IO
+from typing import IO, Any
 
 from .savebugs import BugPersistor
 
@@ -17,8 +19,6 @@ from .savebugs import BugPersistor
 class OutputFormat(StrEnum):
     TERMINAL = "terminal"
     MARKDOWN = "markdown"
-    # TODO: OutputConfig should then provide something like an
-    # out `dict` so we can properly nest items
     JSON = "json"
 
 
@@ -52,6 +52,11 @@ class TriageResult(ABC):
     async def record(self, persistor: BugPersistor) -> None:
         raise NotImplementedError
 
+    @abstractmethod
+    async def to_dict(self) -> dict[str, Any]:
+        """Structured result of builtins and datetimes; ``json.dumps(..., default=json_default)`` it."""
+        raise NotImplementedError
+
 
 class FailedTriageResult(TriageResult):
     """TriageResult stand-in for a source whose fetch raised an exception."""
@@ -64,6 +69,18 @@ class FailedTriageResult(TriageResult):
 
     async def record(self, persistor: BugPersistor) -> None:
         """Nothing to persist for a failed fetch."""
+
+    async def to_dict(self) -> dict[str, Any]:
+        if isinstance(self.error, str):
+            return {"error": self.error}
+        return {"error": "".join(traceback.format_exception_only(self.error)).strip()}
+
+
+def json_default(obj: object) -> str:
+    """``json.dumps`` hook for the datetimes in ``TriageResult.to_dict`` output."""
+    if isinstance(obj, date):
+        return obj.isoformat()
+    raise TypeError(f"{type(obj).__name__} is not JSON serializable")
 
 
 @lru_cache(maxsize=256)

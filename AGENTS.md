@@ -41,6 +41,7 @@ uv run pytest
 - `startriage/sources/` — per-source packages: `github/`, `launchpad/`, `discourse/`, `proposed/`
 - Each source has a `finder.py` (fetch data) and `triage.py` (render output)
 - The common data structure for triage results is `startriage/output.py/TriageResult`
+- Library entry: `triage.build_filter()` + `triage.fetch()` return `{source: TriageResult}` without rendering; `await result.to_dict()` gives structured data (also `--format json`)
 
 ## Design
 - `triage` mode

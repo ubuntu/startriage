@@ -7,7 +7,8 @@ import logging
 import webbrowser
 from dataclasses import dataclass, field
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
+from typing import Any
 
 import aiohttp
 
@@ -17,15 +18,15 @@ from ...output import OutputConfig, OutputFormat, TriageResult, hyperlink
 from ...savebugs import BugPersistor
 from ...source import TaskFilterOptions
 from .finder import DiscourseFinder
-from .models import DiscourseCategory, DiscoursePost, DiscourseTopic
+from .models import DiscoursePost, DiscourseTopic
 
 logger = logging.getLogger(__name__)
 
 
-class PostStatus(Enum):
-    UNCHANGED = 0
-    NEW = 1
-    UPDATED = 2
+class PostStatus(StrEnum):
+    UNCHANGED = "unchanged"
+    NEW = "new"
+    UPDATED = "updated"
 
 
 @dataclass
@@ -59,50 +60,120 @@ def _set_relevant(meta: PostWithMetadata) -> bool:
     return is_relevant
 
 
-def _topic_is_relevant(
-    topic: DiscourseTopic, start: datetime, end: datetime, triage_category_ids: set[int]
-) -> bool:
-    """Return True if *topic* has at least one new/updated post in [start, end)."""
-    posts = topic.get_posts()
-    if not posts:
-        return False
-    meta_list = [_create_post_meta(p, start, end, "") for p in posts]
-    # ignore the team's triage posts, but consider replies to them.
-    cat_id = topic.get_category_id()
-    is_triage = cat_id is not None and cat_id in triage_category_ids
+@dataclass
+class TopicActivity:
+    """A topic with new/updated posts in the triage interval, as reply tree."""
+
+    topic: DiscourseTopic
+    url: str
+    status: PostStatus
+    date: datetime | None
+    # all user posts in topic order
+    posts: list[PostWithMetadata]
+    # top-level reply chains containing relevant posts, main post excluded
+    threads: list[PostWithMetadata]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.topic.get_id(),
+            "title": self.topic.get_name(),
+            "url": self.url,
+            "status": self.status,
+            "date": self.date,
+            "tags": self.topic.get_tags(),
+            "threads": [_post_to_dict(p) for p in self.threads],
+        }
+
+
+def _post_to_dict(meta: PostWithMetadata) -> dict[str, Any]:
+    post = meta.post
+    return {
+        "id": post.get_id(),
+        "number": post.get_post_number(),
+        "url": meta.url,
+        "author": post.get_author_name() or post.get_author_username(),
+        "status": meta.status,
+        "date": meta.update_date,
+        "content": post.get_data(),
+        "replies": [_post_to_dict(r) for r in meta.replies if r.contains_relevant_posts],
+    }
+
+
+def _topic_activity(
+    finder: DiscourseFinder, topic: DiscourseTopic, start: datetime, end: datetime, is_triage: bool
+) -> TopicActivity | None:
+    """Return the topic's activity in [start, end), or None if nothing changed.
+
+    For the team's own triage topics the main post is ignored, only replies count.
+    """
+    posts = [
+        _create_post_meta(p, start, end, finder.get_post_url(topic, i))
+        for i, p in enumerate(topic.get_posts())
+        if not p.is_small_action()
+    ]
+
     if is_triage:
-        for m in meta_list:
+        for m in posts:
             if m.post.is_main_post_for_topic():
                 m.status = PostStatus.UNCHANGED
-    return any(m.status != PostStatus.UNCHANGED for m in meta_list)
+
+    if all(m.status == PostStatus.UNCHANGED for m in posts):
+        return None
+
+    # Build reply tree
+    top_level: list[PostWithMetadata] = []
+    for post in posts:
+        replied_to = next(
+            (m for m in posts if m.post.get_post_number() == post.post.get_reply_to_number()),
+            None,
+        )
+        if replied_to is None or replied_to.post.is_main_post_for_topic():
+            top_level.append(post)
+        if replied_to is not None:
+            replied_to.add_reply(post)
+
+    for post in posts:
+        _set_relevant(post)
+
+    main_post = next((m for m in top_level if m.post.is_main_post_for_topic()), None)
+
+    # latest date among relevant posts
+    best_date = max((p.update_date for p in posts if p.update_date is not None), default=None)
+
+    return TopicActivity(
+        topic=topic,
+        url=finder.get_topic_url(topic),
+        status=main_post.status if main_post else PostStatus.UNCHANGED,
+        date=(main_post.update_date if main_post else None) or best_date,
+        posts=posts,
+        threads=[m for m in top_level if m is not main_post and m.contains_relevant_posts],
+    )
 
 
 @dataclass
 class CategoryResult:
     category_name: str
-    category: DiscourseCategory
-    site: str | None
+    topics: list[TopicActivity]
 
 
 @dataclass
 class DiscourseTriage(TriageResult):
     """Holds all fetched Discourse results for one triage run."""
 
-    finder: DiscourseFinder  # api access
-    filter: TaskFilterOptions
     results: list[CategoryResult]
-    site: str | None = None
-    had_updates: bool = False
-    triage_category_ids: set[int] = field(default_factory=set)
+    site: str
 
-    def _count_relevant_topics(self) -> int:
-        """Count topics across all categories that have new/updated posts."""
-        return sum(
-            1
-            for result in self.results
-            for topic in result.category.get_topics()
-            if _topic_is_relevant(topic, self.filter.start, self.filter.end, self.triage_category_ids)
-        )
+    @property
+    def had_updates(self) -> bool:
+        return any(r.topics for r in self.results)
+
+    async def to_dict(self) -> dict[str, Any]:
+        return {
+            "site": self.site,
+            "categories": [
+                {"name": r.category_name, "topics": [t.to_dict() for t in r.topics]} for r in self.results
+            ],
+        }
 
     async def print_section(
         self,
@@ -110,9 +181,8 @@ class DiscourseTriage(TriageResult):
     ) -> None:
         """Print the # Forum section to stdout (and optionally to a markdown file)."""
 
-        topic_count = self._count_relevant_topics()
-        site_info = f" on {self.site}" if self.site else ""
-        logging.info("Showing forum comments%s", site_info)
+        topic_count = sum(len(r.topics) for r in self.results)
+        logging.info("Showing forum comments on %s", self.site)
 
         match cfg.fmt:
             case OutputFormat.MARKDOWN:
@@ -134,13 +204,7 @@ class DiscourseTriage(TriageResult):
 
         for result in self.results:
             logger.info("Comments belonging to the %s category:", result.category_name)
-            await self._print_category_comments(
-                result.category,
-                self.filter.start,
-                self.filter.end,
-                cfg,
-                triage_category_ids=self.triage_category_ids,
-            )
+            await self._print_category_comments(result.topics, cfg)
 
     async def record(self, persistor: BugPersistor) -> None:
         pass  # no bugs to record, just forum comments
@@ -185,18 +249,17 @@ class DiscourseTriage(TriageResult):
 
     def _print_topic_header(
         self,
-        topic: DiscourseTopic,
-        status: PostStatus,
-        date_updated: datetime | None,
+        activity: TopicActivity,
         cfg: OutputConfig,
         topic_name_length: int = 50,
     ) -> None:
-        topic_url = self.finder.get_topic_url(topic)
-        status_str = {PostStatus.UPDATED: "*", PostStatus.NEW: "+"}.get(status, "")
+        topic_url = activity.url
+        date_updated = activity.date
+        status_str = {PostStatus.UPDATED: "*", PostStatus.NEW: "+"}.get(activity.status, "")
         if not status_str:
             topic_name_length += 1
 
-        name = topic.get_name() or ""
+        name = activity.topic.get_name() or ""
         if len(name) > topic_name_length:
             name = name[: topic_name_length - 1] + "…"
         else:
@@ -249,91 +312,21 @@ class DiscourseTriage(TriageResult):
             self._print_comment_chain(relevant_replies[-1], cfg, chain)
             chain.pop()
 
-    async def _get_editor(self, session: aiohttp.ClientSession | None, post: DiscoursePost) -> str | None:
-        if session is None:
-            return None
-        return await self.finder.get_editor_name(session, post)
+    async def _print_category_comments(self, topics: list[TopicActivity], cfg: OutputConfig) -> None:
+        for activity in topics:
+            self._print_topic_header(activity, cfg)
 
-    async def _print_category_comments(
-        self,
-        category: DiscourseCategory,
-        start: datetime,
-        end: datetime,
-        cfg: OutputConfig,
-        triage_category_ids: set[int] | None = None,
-    ) -> None:
-
-        relevant_topics = []
-        for topic in category.get_topics():
-            posts_raw = topic.get_posts()
-            posts = [
-                _create_post_meta(p, start, end, self.finder.get_post_url(topic, i))
-                for i, p in enumerate(posts_raw)
-                if not p.is_small_action()
-            ]
-
-            # Topics in the triage category: ignore main-post updates, show replies only.
-            cat_id = topic.get_category_id()
-            is_triage = (
-                triage_category_ids is not None and cat_id is not None and cat_id in triage_category_ids
-            )
-            if is_triage:
-                for m in posts:
-                    if m.post.is_main_post_for_topic():
-                        m.status = PostStatus.UNCHANGED
-
-            topic_relevant = any(m.status != PostStatus.UNCHANGED for m in posts)
-            if not topic_relevant:
-                continue
-            relevant_topics.append(posts)
-
-            # Build reply tree
-            final_list: list[PostWithMetadata] = []
-            for post in posts:
-                replied_to = next(
-                    (m for m in posts if m.post.get_post_number() == post.post.get_reply_to_number()),
-                    None,
-                )
-                if replied_to is None or replied_to.post.is_main_post_for_topic():
-                    final_list.append(post)
-                if replied_to is not None:
-                    replied_to.add_reply(post)
-
-            for post in posts:
-                _set_relevant(post)
-
-            # Find main post
-            main_post = next((m for m in final_list if m.post.is_main_post_for_topic()), None)
-
-            # Best date for the header: latest update_date among relevant posts
-            # (falls back to None if no relevant post has a date)
-            best_date = max(
-                (p.update_date for p in posts if p.update_date is not None),
-                default=None,
-            )
-
-            if main_post:
-                self._print_topic_header(
-                    topic,
-                    main_post.status,
-                    main_post.update_date or best_date,
-                    cfg,
-                )
-                final_list = [m for m in final_list if m != main_post and m.contains_relevant_posts]
-            else:
-                self._print_topic_header(topic, PostStatus.UNCHANGED, best_date, cfg)
-
-            for post in final_list[:-1]:
+            for post in activity.threads[:-1]:
                 self._print_comment_chain(post, cfg, ["├"])
-            if final_list:
-                self._print_comment_chain(final_list[-1], cfg, ["└"])
+            if activity.threads:
+                self._print_comment_chain(activity.threads[-1], cfg, ["└"])
 
             print(file=cfg.out)  # blank line after each topic (spacing in terminal / notes in markdown)
 
         if cfg.open_in_browser:
             # only open the latest updated post in each topic
-            for posts in relevant_topics:
-                for post in reversed(posts):
+            for activity in topics:
+                for post in reversed(activity.posts):
                     if post.status == PostStatus.UNCHANGED:
                         continue
 
@@ -351,11 +344,8 @@ async def find(
 
     team_config = config.get_team(filter.team)
 
-    site: str | None = None
-    tag: str | None = None
-
     async with aiohttp.ClientSession() as session:
-        finder = DiscourseFinder(site)
+        finder = DiscourseFinder()
 
         # Resolve triage category names → IDs
         resolved_triage_ids: set[int] = set()
@@ -375,20 +365,19 @@ async def find(
                 continue
 
             await finder.add_topics_to_category(
-                session, category, ignore_before=filter.start, ignore_after=filter.end, site=site
+                session, category, ignore_before=filter.start, ignore_after=filter.end
             )
 
             logger.info("Fetching Discourse comments…")
-            # Fetch all topic posts concurrently
-            topics = [t for t in category.get_topics() if tag is None or t.has_tag(tag)]
+            topics = category.get_topics()
             await asyncio.gather(*[finder.add_posts_to_topic(session, t) for t in topics])
 
-            results.append(CategoryResult(category_name, category, site))
+            activities = [
+                _topic_activity(
+                    finder, t, filter.start, filter.end, is_triage=t.get_category_id() in resolved_triage_ids
+                )
+                for t in topics
+            ]
+            results.append(CategoryResult(category_name, [a for a in activities if a is not None]))
 
-        return DiscourseTriage(
-            finder=finder,
-            filter=filter,
-            site=site,
-            triage_category_ids=resolved_triage_ids,
-            results=results,
-        )
+    return DiscourseTriage(results=results, site=finder.site)

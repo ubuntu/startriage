@@ -5,8 +5,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import webbrowser
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import date
+from typing import Any
 
 import aiohttp
 
@@ -176,36 +177,12 @@ class GithubTriage(TriageResult):
         item_ids = {entry.key for entry in items}
         persistor.record("github", item_ids)
 
-    def to_dict(self) -> dict:
-        """Serialise results to a plain dict (JSON-compatible)."""
+    async def to_dict(self) -> dict[str, Any]:
         return {
-            "results": [
-                {
-                    "repo": r.repo,
-                    "labels": r.labels,
-                    "prs": [
-                        {
-                            "number": pr.number,
-                            "title": pr.title,
-                            "url": pr.html_url,
-                            "updated_at": str(pr.updated_at),
-                            "labels": pr.labels,
-                        }
-                        for pr in r.prs
-                    ],
-                    "issues": [
-                        {
-                            "number": i.number,
-                            "title": i.title,
-                            "url": i.html_url,
-                            "updated_at": str(i.updated_at),
-                            "labels": i.labels,
-                        }
-                        for i in r.issues
-                    ],
-                }
-                for r in self.results
-            ],
+            "mode": self.mode,
+            "start": self.start,
+            "end": self.end,
+            "repos": [asdict(r) for r in self.results],
         }
 
 

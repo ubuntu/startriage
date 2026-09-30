@@ -6,6 +6,7 @@ lp_triage_updates = "theirs"
 #proposed_min_age = 4
 #default_team = # automatic if 1 defined
 #lp_extended = # depends on mode
+#lp_credentials_file = "~/.local/share/startriage/lp_creds"
 
 [ai]
 # AI-assisted triage backend (see 'startriage config set --help').

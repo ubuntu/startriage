@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
-import json
 import logging
 import re
 import webbrowser
 from dataclasses import dataclass, field
+from typing import Any
 
 import aiohttp
 from launchpadlib.launchpad import Launchpad
@@ -98,13 +98,7 @@ class LaunchpadTriage(TriageResult):
         if bug_count == 0 and not self.tasks.freezer_tasks and not unassigned and not former_bugs:
             return
 
-        ctx = RenderContext(
-            nowork_statuses=self.tasks.nowork_statuses,
-            open_statuses=self.tasks.open_statuses,
-            unapproved_bug_fixes=self.unapproved_bug_fixes,
-            recent_since=self.filter.recent_since,
-            old_since=self.filter.old_since,
-        )
+        ctx = self._render_context()
 
         reported: set[str] = set(
             await _print_bugs(
@@ -165,15 +159,32 @@ class LaunchpadTriage(TriageResult):
         ids.update(t.number for t in self.tasks.freezer_tasks)
         persistor.record("launchpad", ids)
 
-    def to_json(self) -> str:
-        ctx = RenderContext(
+    async def to_dict(self) -> dict[str, Any]:
+        # Task fields resolve lazily through blocking launchpadlib calls
+        return await asyncio.to_thread(self._to_dict)
+
+    def _to_dict(self) -> dict[str, Any]:
+        ctx = self._render_context()
+
+        def tasks(tasks: list[Task]) -> list[dict[str, Any]]:
+            return [t.to_dict(ctx) for t in tasks]
+
+        return {
+            "mode": self.mode,
+            "tasks": tasks(self.tasks.tasks),
+            "freezer_tasks": tasks(self.tasks.freezer_tasks),
+            "expiring_tagged": tasks(self.tasks.expiring_tagged),
+            "expiring_subscribed": tasks(self.tasks.expiring_subscribed),
+        }
+
+    def _render_context(self) -> RenderContext:
+        return RenderContext(
             nowork_statuses=self.tasks.nowork_statuses,
             open_statuses=self.tasks.open_statuses,
             unapproved_bug_fixes=self.unapproved_bug_fixes,
             recent_since=self.filter.recent_since,
             old_since=self.filter.old_since,
         )
-        return json.dumps([t.to_dict(ctx) for t in self.tasks.tasks], indent=4, default=str)
 
 
 async def _print_bugs(
@@ -328,7 +339,7 @@ async def find(
     team_config = config.get_team(filter.team)
 
     logger.debug("Logging into Launchpad…")
-    lp = connect_launchpad()
+    lp = connect_launchpad(config.general.lp_credentials_file)
     logger.debug("Fetching Launchpad bugs…")
     try:
         lp_tasks = await asyncio.to_thread(

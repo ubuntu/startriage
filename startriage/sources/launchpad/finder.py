@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sys
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import aiohttp
 import debian.deb822
@@ -87,12 +89,31 @@ def _discard_foreign_credentials(cred_location) -> None:
         cred_location.unlink(missing_ok=True)
 
 
-def connect_launchpad() -> Launchpad:
-    cred_dir = platformdirs.user_data_path("startriage")
-    cred_dir.mkdir(parents=True, exist_ok=True)
-    cred_location = cred_dir / "lp_creds"
-    _discard_foreign_credentials(cred_location)
-    credential_store = UnencryptedFileCredentialStore(str(cred_location))
+class LaunchpadAuthError(Exception):
+    """Launchpad needs an interactive authorization, but there is no terminal to do it."""
+
+
+class _NonInteractiveAuthorization(AuthorizeRequestTokenWithURL):
+    """Fail instead of blocking on stdin, e.g. when used by a web backend."""
+
+    def make_end_user_authorize_token(self, credentials, request_token):
+        raise LaunchpadAuthError(
+            "Launchpad credentials are missing or were rejected; "
+            "authorize once by running 'startriage triage -s launchpad' in a terminal"
+        )
+
+
+def connect_launchpad(credentials_file: Path | None = None) -> Launchpad:
+    """Log into Launchpad, authorizing interactively only when stdin is a terminal."""
+    if credentials_file is None:
+        credentials_file = platformdirs.user_data_path("startriage") / "lp_creds"
+    credentials_file.parent.mkdir(parents=True, exist_ok=True)
+    _discard_foreign_credentials(credentials_file)
+    credential_store = UnencryptedFileCredentialStore(str(credentials_file))
+
+    # custom engine for our consumer name is a workaround until
+    # https://code.launchpad.net/~jj/launchpadlib/+git/launchpadlib/+merge/505695 is released
+    engine_cls = AuthorizeRequestTokenWithURL if sys.stdin.isatty() else _NonInteractiveAuthorization
 
     logger.debug("logging into launchpad...")
     return Launchpad.login_with(
@@ -100,9 +121,7 @@ def connect_launchpad() -> Launchpad:
         service_root="production",
         version="devel",
         credential_store=credential_store,
-        # workaround until https://code.launchpad.net/~jj/launchpadlib/+git/launchpadlib/+merge/505695
-        # is released
-        authorization_engine=AuthorizeRequestTokenWithURL(
+        authorization_engine=engine_cls(
             "production",
             consumer_name=LP_CONSUMER_NAME,
             allow_access_levels=LP_ACCESS_LEVELS,

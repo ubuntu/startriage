@@ -106,13 +106,16 @@ class GeneralConfig(BaseModel):
     default_team: str | None = None
     proposed_min_age: int = 4
     github_token: str | None = None
+    lp_credentials_file: Path | None = None
 
     @model_validator(mode="after")
-    def expand_savebugs_dir(self) -> GeneralConfig:
+    def expand_paths(self) -> GeneralConfig:
         if self.savebugs_dir is not None:
             self.savebugs_dir = self.savebugs_dir.expanduser()
             if not self.savebugs_dir.is_dir():
                 raise ValueError(f"savebugs_dir {self.savebugs_dir!r} is not a directory")
+        if self.lp_credentials_file is not None:
+            self.lp_credentials_file = self.lp_credentials_file.expanduser()
         return self
 
 

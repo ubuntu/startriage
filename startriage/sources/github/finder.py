@@ -70,6 +70,8 @@ async def _graphql(
                 raise RuntimeError(f"GitHub GraphQL ({_GH_GRAPHQL}) HTTP {resp.status}: {text[:200]}")
             data = await resp.json(content_type=None)
 
+        if not isinstance(data, dict):
+            raise RuntimeError(f"GitHub GraphQL ({_GH_GRAPHQL}): unexpected response {data!r}")
         if errors := data.get("errors"):
             raise RuntimeError(f"GitHub GraphQL errors: {errors}")
 

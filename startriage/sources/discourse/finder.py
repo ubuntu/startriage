@@ -30,6 +30,10 @@ class DiscourseFinder:
     def __init__(self, site: str | None = None):
         self._site = site or DISCOURSE_INSTANCE
 
+    @property
+    def site(self) -> str:
+        return self._site
+
     async def _get_json(self, session: aiohttp.ClientSession, url: str) -> dict | None:
         """GET url, return parsed JSON or None on error."""
         try:
@@ -144,11 +148,10 @@ class DiscourseFinder:
         category: DiscourseCategory,
         ignore_before: datetime | None = None,
         ignore_after: datetime | None = None,
-        site: str | None = None,
     ) -> None:
         """Recursively fetch all topics for a category, stopping at old topics."""
         url = self._CATEGORY_TOPIC_LIST_URL.format(site=self._site, id=category.get_id())
-        await self._add_topics_from_url(session, category, url, ignore_before, ignore_after, site)
+        await self._add_topics_from_url(session, category, url, ignore_before, ignore_after)
 
     async def _add_topics_from_url(
         self,
@@ -157,7 +160,6 @@ class DiscourseFinder:
         url: str,
         ignore_before: datetime | None,
         ignore_after: datetime | None,
-        site: str | None,
     ) -> None:
         data = await self._get_json(session, url)
         if not data:
@@ -180,7 +182,7 @@ class DiscourseFinder:
         if "more_topics_url" in topic_list:
             raw_next = topic_list["more_topics_url"]
             next_url = f"{self._site}{'.json?'.join(raw_next.split('?'))}"
-            await self._add_topics_from_url(session, category, next_url, ignore_before, ignore_after, site)
+            await self._add_topics_from_url(session, category, next_url, ignore_before, ignore_after)
 
     async def get_editor_name(self, session: aiohttp.ClientSession, post: DiscoursePost) -> str | None:
         """Fetch the display name of the most recent editor of a main post."""
