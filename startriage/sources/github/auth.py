@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import argparse
 import asyncio
 import logging
 import os
@@ -12,7 +11,7 @@ import webbrowser
 
 import aiohttp
 
-from startriage.config import DEFAULT_USER_CONFIG, StarTriageConfig, update_user_config
+from startriage.config import DEFAULT_USER_CONFIG
 
 logger = logging.getLogger(__name__)
 
@@ -31,23 +30,13 @@ class GitHubRateLimitError(RuntimeError):
         super().__init__(
             "GitHub API rate limit exceeded.\n\n"
             "To authenticate and get a higher rate limit, you can:\n"
-            "  1. Run 'startriage github login' to authenticate interactively\n"
+            "  1. Run 'startriage login github' to authenticate interactively\n"
             f"  2. Set github_token in {DEFAULT_USER_CONFIG} through "
             "`startriage config set --github-token <token>`\n"
             "     - get a personal access token from https://github.com/settings/tokens\n"
             "     - the special token value 'gh' fetches a token from the gh CLI dynamically)\n"
             "  3. Set the GH_TOKEN or GITHUB_TOKEN environment variable\n"
         )
-
-
-async def _run_github_login(args: argparse.Namespace, _config: StarTriageConfig) -> None:
-    token = await github_device_flow_login()
-    path = update_user_config(
-        {"general": {"github_token": token}},
-        config_path=args.config,
-        sensitive=True,
-    )
-    print(f"GitHub token saved to: {path}")
 
 
 def get_github_token(config_token: str | None = None) -> str | None:

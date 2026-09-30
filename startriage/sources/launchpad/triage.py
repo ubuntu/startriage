@@ -132,8 +132,8 @@ class LaunchpadTriage(TriageResult):
 
         if self.mode == FetchMode.triage and self.filter.show_expiration:
             await _print_old_bugs(
-                self.tasks.expiring_tagged,
-                self.tasks.expiring_subscribed,
+                self.tasks.expire_level1,
+                self.tasks.expire_level2,
                 ctx,
                 cfg,
                 self.config,
@@ -173,8 +173,8 @@ class LaunchpadTriage(TriageResult):
             "mode": self.mode,
             "tasks": tasks(self.tasks.tasks),
             "freezer_tasks": tasks(self.tasks.freezer_tasks),
-            "expiring_tagged": tasks(self.tasks.expiring_tagged),
-            "expiring_subscribed": tasks(self.tasks.expiring_subscribed),
+            "expire_level1": tasks(self.tasks.expire_level1),
+            "expire_level2": tasks(self.tasks.expire_level2),
         }
 
     def _render_context(self) -> RenderContext:
@@ -289,8 +289,8 @@ def _print_section_header(label: str, tasks: list[Task], cfg: OutputConfig, extr
 
 
 async def _print_old_bugs(
-    expiring_tagged: list[Task],
-    expiring_subscribed: list[Task],
+    expire_level1: list[Task],
+    expire_level2: list[Task],
     ctx: RenderContext,
     out_cfg: OutputConfig,
     config: GeneralConfig,
@@ -301,13 +301,13 @@ async def _print_old_bugs(
             for label, exp_tasks, days, order_by_date in [
                 (
                     "Expiring level 1",
-                    expiring_tagged,
+                    expire_level1,
                     config.lp_expire_level1_days,
                     False,
                 ),
                 (
                     "Expiring level 2",
-                    expiring_subscribed,
+                    expire_level2,
                     config.lp_expire_level2_days,
                     True,
                 ),
@@ -320,7 +320,7 @@ async def _print_old_bugs(
                 await _print_bugs(exp_tasks, ctx, out_cfg, extended, order_by_date=order_by_date)
 
         case OutputFormat.MARKDOWN:
-            exp_tasks = list(set(expiring_tagged) | set(expiring_subscribed))
+            exp_tasks = list(set(expire_level1) | set(expire_level2))
             _print_section_header("Old", exp_tasks, out_cfg)
             await _print_bugs(exp_tasks, ctx, out_cfg, extended, order_by_date=True)
 
@@ -339,7 +339,7 @@ async def find(
     team_config = config.get_team(filter.team)
 
     logger.debug("Logging into Launchpad…")
-    lp = connect_launchpad(config.general.lp_credentials_file)
+    lp = await asyncio.to_thread(connect_launchpad, config.general.lp_credentials_file)
     logger.debug("Fetching Launchpad bugs…")
     try:
         lp_tasks = await asyncio.to_thread(

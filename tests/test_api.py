@@ -11,16 +11,17 @@ import pytest
 from startriage.config import load_config
 from startriage.enums import FetchMode
 from startriage.output import FailedTriageResult, OutputConfig, OutputFormat, TriageResult, json_default
+from startriage.report import triage
 from startriage.source import TriageSource
 from startriage.sources.discourse.finder import DiscourseFinder
 from startriage.sources.discourse.models import DiscoursePost, DiscourseTopic
 from startriage.sources.discourse.triage import PostStatus, _topic_activity
 from startriage.sources.github.models import Issue, RepoResult
 from startriage.sources.github.triage import GithubTriage
-from startriage.sources.launchpad.finder import LaunchpadAuthError, _NonInteractiveAuthorization
+from startriage.sources.launchpad.finder import LaunchpadAuthError, _NoAuthorization
 from startriage.sources.proposed.models import MigrationExcuse, ProposedMigrationData
 from startriage.sources.proposed.triage import ProposedMigrationTriage
-from startriage.triage import _render_sections, _start_fetches, build_filter, fetch
+from startriage.triage import build_filter, fetch
 
 START = datetime(2026, 9, 28, tzinfo=timezone.utc)
 END = datetime(2026, 9, 28, 23, 59, 59, tzinfo=timezone.utc)
@@ -65,8 +66,14 @@ async def test_fetch_captures_errors(config):
         **{**opts.__dict__, "sources": frozenset({_source("ok", ok), _source("bad", KeyError("x"))})}
     )
 
-    results = await fetch(config, opts, FetchMode.triage)
+    seen = []
 
+    async def on_result(source, result):
+        seen.append(source)
+
+    results = await fetch(config, opts, FetchMode.triage, on_result=on_result)
+
+    assert sorted(seen) == ["bad", "ok"]
     assert results["ok"] is ok
     assert isinstance(results["bad"], FailedTriageResult)
     assert await results["bad"].to_dict() == {"error": "KeyError: 'x'"}
@@ -78,9 +85,7 @@ async def test_render_json(config):
     opts = type(opts)(**{**opts.__dict__, "sources": frozenset({_source("proposed", _proposed())})})
     out = io.StringIO()
 
-    await _render_sections(
-        OutputConfig(fmt=OutputFormat.JSON, out=out), _start_fetches(config, opts, FetchMode.triage)
-    )
+    await triage(config, opts, OutputConfig(fmt=OutputFormat.JSON, out=out))
 
     data = json.loads(out.getvalue())
     excuse = data["proposed"]["excuses"][0]
@@ -135,6 +140,6 @@ def test_topic_activity_tree():
 
 
 def test_launchpad_noninteractive_auth():
-    engine = _NonInteractiveAuthorization("production", consumer_name="startriage")
-    with pytest.raises(LaunchpadAuthError):
+    engine = _NoAuthorization("production", consumer_name="startriage")
+    with pytest.raises(LaunchpadAuthError, match="startriage login launchpad"):
         engine.make_end_user_authorize_token(None, "token")

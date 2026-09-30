@@ -16,10 +16,12 @@ from .config import (
 from .enums import AIPermission, AIProvider, UpdateFilter
 from .log import log_setup
 from .output import OutputConfig, OutputFormat
+from .report import print_fetch_errors, todo, triage
 from .savebugs import BugPersistor, SaveConfig
 from .source import TaskFilterOptions
-from .sources.github.auth import _run_github_login
-from .triage import SOURCES, build_filter, print_fetch_errors, run_todo, run_triage
+from .sources.github.auth import github_device_flow_login
+from .sources.launchpad.finder import connect_launchpad, login_launchpad
+from .triage import SOURCES, build_filter
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -291,12 +293,15 @@ GREEN = done
     config_show_p = config_sp.add_parser("show", help="Display resolved configuration")
     config_show_p.set_defaults(func=_show_config)
 
-    # --- github ---
-    github_p = sp.add_parser("github", help="GitHub integration commands")
-    github_sp = github_p.add_subparsers(required=True)
-
-    github_login_p = github_sp.add_parser("login", help="Authenticate with GitHub via device flow")
-    github_login_p.set_defaults(func=_run_github_login)
+    # --- login ---
+    login_p = sp.add_parser("login", help="Authorize startriage to access a service")
+    login_p.add_argument(
+        "service",
+        choices=["launchpad", "github"],
+        help="launchpad: store credentials in general.lp_credentials_file; "
+        "github: store a token via device flow in general.github_token",
+    )
+    login_p.set_defaults(func=_run_login)
 
     return parser
 
@@ -388,7 +393,7 @@ async def _run_triage(args: argparse.Namespace, config: StarTriageConfig) -> Non
         general = general.model_copy(update={"proposed_min_age": args.proposed_min_age})
     config.general = general
 
-    results = await run_triage(config, filter, output_cfg)
+    results = await triage(config, filter, output_cfg)
 
     if print_fetch_errors(results):
         sys.exit(1)
@@ -416,7 +421,7 @@ async def _run_todo(args: argparse.Namespace, config: StarTriageConfig) -> None:
 
     output_cfg = _outputcfg_from_args(args, BugPersistor(save_cfg))
 
-    results = await run_todo(
+    results = await todo(
         config,
         filter,
         output_cfg=output_cfg,
@@ -427,11 +432,27 @@ async def _run_todo(args: argparse.Namespace, config: StarTriageConfig) -> None:
         sys.exit(1)
 
 
+async def _run_login(args: argparse.Namespace, config: StarTriageConfig) -> None:
+    match args.service:
+        case "launchpad":
+            name = login_launchpad(config.general.lp_credentials_file)
+            print(f"Logged into Launchpad as {name}")
+        case "github":
+            token = await github_device_flow_login()
+            path = update_user_config(
+                {"general": {"github_token": token}}, config_path=args.config, sensitive=True
+            )
+            print(f"GitHub token saved to: {path}")
+        case _:
+            raise NotImplementedError(args.service)
+
+
 async def _run_analyze(args: argparse.Namespace, config: StarTriageConfig) -> None:
     if args.ai is None:
         from .ai import describe_bug_specs
 
-        report = await describe_bug_specs(args.bug)
+        lp = await asyncio.to_thread(connect_launchpad, config.general.lp_credentials_file)
+        report = await describe_bug_specs(lp, args.bug)
         if report is None:
             print("No valid bugs found.", file=sys.stderr)
             return
@@ -441,7 +462,8 @@ async def _run_analyze(args: argparse.Namespace, config: StarTriageConfig) -> No
     from .ai import build_provider, run_ai_over_bug_specs
 
     provider = build_provider(config.ai, args.ai)
-    report = await run_ai_over_bug_specs(config, args.bug, provider=provider)
+    lp = await asyncio.to_thread(connect_launchpad, config.general.lp_credentials_file)
+    report = await run_ai_over_bug_specs(config, lp, args.bug, provider=provider)
     if report is None:
         print("No valid bugs to triage.", file=sys.stderr)
         return

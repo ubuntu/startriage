@@ -460,6 +460,7 @@ class LaunchpadTasks:
     changes_pairs: list[tuple[str, str]] = field(default_factory=list)
     nowork_statuses: list[str] = field(default_factory=list)
     open_statuses: list[str] = field(default_factory=list)
-    expiring_tagged: list[Task] = field(default_factory=list)
-    expiring_subscribed: list[Task] = field(default_factory=list)
+    # open bugs whose last activity was lp_expire_level{1,2}_days before the triage window
+    expire_level1: list[Task] = field(default_factory=list)
+    expire_level2: list[Task] = field(default_factory=list)
     freezer_tasks: list[Task] = field(default_factory=list)

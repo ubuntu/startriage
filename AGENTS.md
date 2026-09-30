@@ -37,11 +37,13 @@ uv run pytest
 ## Key Architecture
 - `startriage/config.py` — Pydantic-based TOML config loading
 - `startriage/cli.py` — argparse CLI with subcommands (`triage`, `todo`, `config`)
-- `startriage/triage.py` — generic orchestrator for all sources
+- `startriage/triage.py` — library API: `build_filter()`, `fetch()`; no rendering
+- `startriage/report.py` — renders `triage`/`todo` reports (terminal, markdown, json) on top of `fetch()`
 - `startriage/sources/` — per-source packages: `github/`, `launchpad/`, `discourse/`, `proposed/`
 - Each source has a `finder.py` (fetch data) and `triage.py` (render output)
 - The common data structure for triage results is `startriage/output.py/TriageResult`
 - Library entry: `triage.build_filter()` + `triage.fetch()` return `{source: TriageResult}` without rendering; `await result.to_dict()` gives structured data (also `--format json`)
+- Only `startriage login {launchpad,github}` prompts; sources never do and fail without credentials
 
 ## Design
 - `triage` mode

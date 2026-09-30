@@ -30,7 +30,9 @@ from .provider import Provider, build_provider
 from .render import render_bug_metadata, render_report
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping
+
+    from launchpadlib.launchpad import Launchpad
 
     from ..output import TriageResult
     from ..sources.launchpad.models import Task
@@ -60,12 +62,10 @@ def parse_bug_number(spec: str) -> str:
     raise ValueError(f"could not parse a Launchpad bug number from {spec!r}")
 
 
-def gather_user_bug_payloads(bug_specs: list[str]) -> list[dict[str, Any]]:
+def gather_user_bug_payloads(lp: Launchpad, bug_specs: list[str]) -> list[dict[str, Any]]:
     """Resolve user-supplied bug specs into agent payloads (blocking LP access)."""
-    from ..sources.launchpad.finder import connect_launchpad
     from ..sources.launchpad.models import Task
 
-    lp = connect_launchpad()
     payloads: list[dict[str, Any]] = []
     seen: set[str] = set()
     for spec in bug_specs:
@@ -151,6 +151,7 @@ async def run_agent_on_payloads(
 
 async def run_ai_over_bug_specs(
     config: StarTriageConfig,
+    lp: Launchpad,
     bug_specs: list[str],
     *,
     provider: Provider | None = None,
@@ -161,20 +162,20 @@ async def run_ai_over_bug_specs(
     resolved from ``bug_specs``. Launchpad access runs off-thread so the async
     event loop is not blocked.
     """
-    payloads = await asyncio.to_thread(gather_user_bug_payloads, bug_specs)
+    payloads = await asyncio.to_thread(gather_user_bug_payloads, lp, bug_specs)
     if not payloads:
         return None
     return await run_agent_on_payloads(config, payloads, provider=provider)
 
 
-async def describe_bug_specs(bug_specs: list[str]) -> str | None:
+async def describe_bug_specs(lp: Launchpad, bug_specs: list[str]) -> str | None:
     """Resolve user-supplied bug specs and render their metadata (no AI agent).
 
     Returns the rendered markdown, or ``None`` when no valid bug could be
     resolved from ``bug_specs``. Launchpad access runs off-thread so the async
     event loop is not blocked.
     """
-    payloads = await asyncio.to_thread(gather_user_bug_payloads, bug_specs)
+    payloads = await asyncio.to_thread(gather_user_bug_payloads, lp, bug_specs)
     if not payloads:
         return None
     return render_bug_metadata(payloads)
@@ -182,7 +183,7 @@ async def describe_bug_specs(bug_specs: list[str]) -> str | None:
 
 async def run_ai_over_triage_results(
     config: StarTriageConfig,
-    results: Sequence[tuple[str, TriageResult]],
+    results: Mapping[str, TriageResult],
     *,
     provider: Provider | None = None,
 ) -> str | None:
@@ -193,11 +194,8 @@ async def run_ai_over_triage_results(
     """
     from ..sources.launchpad.triage import LaunchpadTriage
 
-    tasks: list[Task] = []
-    for _, result in results:
-        if isinstance(result, LaunchpadTriage):
-            tasks = list(result.tasks.tasks)
-            break
+    result = results.get("launchpad")
+    tasks: list[Task] = list(result.tasks.tasks) if isinstance(result, LaunchpadTriage) else []
 
     payloads = await asyncio.to_thread(payloads_from_tasks, tasks)
     return await run_agent_on_payloads(config, payloads, provider=provider)

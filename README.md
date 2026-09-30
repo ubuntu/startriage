@@ -151,6 +151,13 @@ startriage config show
 startriage config set --default-team ubuntu-server
 ```
 
+Authorize access once:
+
+```bash
+startriage login launchpad
+startriage login github
+```
+
 ## Save / Compare Bug Lists
 
 ```bash
@@ -166,3 +173,25 @@ startriage todo -S ~/savebugs/todo-$(date -I).yaml
 # Compare against a previous save to spot new and closed bugs
 startriage todo -C ~/savebugs/todo-2026-04-01.yaml
 ```
+
+## Library Usage
+
+Fetch structured results without rendering, e.g. for a web backend:
+
+```python
+from startriage.config import load_config
+from startriage.enums import FetchMode
+from startriage.triage import build_filter, fetch
+
+config = load_config(None)  # or construct a StarTriageConfig directly
+opts = build_filter(config, interval="yesterday", sources="launchpad,github")
+results = await fetch(config, opts, FetchMode.triage)  # or FetchMode.todo
+
+for source, result in results.items():
+    data = await result.to_dict()  # JSON-ready with json_default; {"error": ...} if the fetch failed
+```
+
+The objects in `results` (e.g. `LaunchpadTriage.tasks`) are available as well.
+`startriage triage --format json` prints the same `to_dict()` data.
+
+Nothing prompts: without stored credentials (`startriage login launchpad`, path in `general.lp_credentials_file`), the Launchpad result carries a `LaunchpadAuthError`.

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -90,21 +89,20 @@ def _discard_foreign_credentials(cred_location) -> None:
 
 
 class LaunchpadAuthError(Exception):
-    """Launchpad needs an interactive authorization, but there is no terminal to do it."""
+    """Launchpad credentials are missing or were rejected."""
 
 
-class _NonInteractiveAuthorization(AuthorizeRequestTokenWithURL):
-    """Fail instead of blocking on stdin, e.g. when used by a web backend."""
+class _NoAuthorization(AuthorizeRequestTokenWithURL):
+    """Fail instead of prompting; only `startriage login launchpad` authorizes."""
 
     def make_end_user_authorize_token(self, credentials, request_token):
         raise LaunchpadAuthError(
-            "Launchpad credentials are missing or were rejected; "
-            "authorize once by running 'startriage triage -s launchpad' in a terminal"
+            "Launchpad credentials are missing or were rejected; run 'startriage login launchpad'"
         )
 
 
-def connect_launchpad(credentials_file: Path | None = None) -> Launchpad:
-    """Log into Launchpad, authorizing interactively only when stdin is a terminal."""
+def connect_launchpad(credentials_file: Path | None = None, interactive: bool = False) -> Launchpad:
+    """Log into Launchpad with stored credentials; *interactive* prompts on the terminal if needed."""
     if credentials_file is None:
         credentials_file = platformdirs.user_data_path("startriage") / "lp_creds"
     credentials_file.parent.mkdir(parents=True, exist_ok=True)
@@ -113,7 +111,7 @@ def connect_launchpad(credentials_file: Path | None = None) -> Launchpad:
 
     # custom engine for our consumer name is a workaround until
     # https://code.launchpad.net/~jj/launchpadlib/+git/launchpadlib/+merge/505695 is released
-    engine_cls = AuthorizeRequestTokenWithURL if sys.stdin.isatty() else _NonInteractiveAuthorization
+    engine_cls = AuthorizeRequestTokenWithURL if interactive else _NoAuthorization
 
     logger.debug("logging into launchpad...")
     return Launchpad.login_with(
@@ -122,11 +120,15 @@ def connect_launchpad(credentials_file: Path | None = None) -> Launchpad:
         version="devel",
         credential_store=credential_store,
         authorization_engine=engine_cls(
-            "production",
-            consumer_name=LP_CONSUMER_NAME,
-            allow_access_levels=LP_ACCESS_LEVELS,
+            "production", consumer_name=LP_CONSUMER_NAME, allow_access_levels=LP_ACCESS_LEVELS
         ),
     )
+
+
+def login_launchpad(credentials_file: Path | None = None) -> str:
+    """Authorize startriage on the terminal unless stored credentials work; return the user name."""
+    # the first request triggers authorization for missing or rejected credentials
+    return connect_launchpad(credentials_file, interactive=True).me.name
 
 
 def _fast_target_name(obj) -> str:
@@ -374,8 +376,8 @@ def fetch_bugs(
 
     # Expiration section: bugs that fell through the triage window N days ago.
     # Uses the same shifted-window set-difference pattern as the main triage query.
-    expiring_tagged: list[Task] = []
-    expiring_subscribed: list[Task] = []
+    expire_level1: list[Task] = []
+    expire_level2: list[Task] = []
     if mode == FetchMode.triage and filter.show_expiration and filter.start and filter.end:
 
         def _expiring_window(days: int) -> list[Task]:
@@ -415,19 +417,19 @@ def fetch_bugs(
             return result
 
         logger.debug("fetching expiring bugs level 1 (~%d days ago)\u2026", expire_level1_days)
-        expiring_tagged = _expiring_window(expire_level1_days)
-        logger.debug("%d expiring level-1 bugs.", len({t.number for t in expiring_tagged}))
+        expire_level1 = _expiring_window(expire_level1_days)
+        logger.debug("%d expiring level-1 bugs.", len({t.number for t in expire_level1}))
 
         logger.debug("fetching expiring bugs level 2 (~%d days ago)\u2026", expire_level2_days)
-        expiring_subscribed = _expiring_window(expire_level2_days)
-        logger.debug("%d expiring level-2 bugs.", len({t.number for t in expiring_subscribed}))
+        expire_level2 = _expiring_window(expire_level2_days)
+        logger.debug("%d expiring level-2 bugs.", len({t.number for t in expire_level2}))
 
     active_series = [s.name for s in ubuntu.series_collection if s.active]
     logger.debug("determining unapproved uploads for bug (%d release series)...", len(active_series))
 
     relevant_packages = {t.src for t in tasks}
-    relevant_packages.update(t.src for t in expiring_tagged)
-    relevant_packages.update(t.src for t in expiring_subscribed)
+    relevant_packages.update(t.src for t in expire_level1)
+    relevant_packages.update(t.src for t in expire_level2)
 
     # Collect (pkg_name, changes_url) pairs for all active series - all LP access here,
     # so no LP objects escape to the async event loop
@@ -450,7 +452,7 @@ def fetch_bugs(
         changes_pairs,
         NOWORK_BUG_STATUSES,
         OPEN_BUG_STATUSES,
-        expiring_tagged,
-        expiring_subscribed,
+        expire_level1,
+        expire_level2,
         freezer_tasks,
     )
