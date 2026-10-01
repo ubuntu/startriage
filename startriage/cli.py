@@ -10,8 +10,8 @@ from pathlib import Path
 from .ai.provider import AIPermission
 from .config import (
     DEFAULT_USER_CONFIG,
-    AIConfigError,
     AIProvider,
+    ConfigError,
     StarTriageConfig,
     UpdateFilter,
     load_config,
@@ -356,7 +356,7 @@ def main() -> None:
         asyncio.run(_run())
     except KeyboardInterrupt:
         sys.exit(130)
-    except AIConfigError as exc:
+    except ConfigError as exc:
         print(f"error: {exc}", file=sys.stderr)
         sys.exit(2)
 

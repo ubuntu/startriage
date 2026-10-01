@@ -6,9 +6,15 @@ import textwrap
 from pathlib import Path
 
 import pytest
-from pydantic import ValidationError
 
-from startriage.config import AIConfig, AIConfigError, AIProvider, load_config, update_user_config
+from startriage.config import (
+    AIConfig,
+    AIConfigError,
+    AIProvider,
+    ConfigError,
+    load_config,
+    update_user_config,
+)
 
 
 def _write_toml(tmp_path: Path, content: str) -> Path:
@@ -120,7 +126,7 @@ def test_invalid_lp_triage_updates_filter(tmp_path):
         lp_triage_updates = "invalid_value"
         """,
     )
-    with pytest.raises(ValidationError):
+    with pytest.raises(ConfigError):
         load_config(p)
 
 
@@ -132,7 +138,7 @@ def test_extra_field_rejected(tmp_path):
         typo_field = true
         """,
     )
-    with pytest.raises(ValidationError):
+    with pytest.raises(ConfigError):
         load_config(p)
 
 
@@ -181,7 +187,15 @@ def test_ai_invalid_provider(tmp_path):
         provider = "bogus"
         """,
     )
-    with pytest.raises(ValidationError):
+    with pytest.raises(
+        ConfigError, match=rf"invalid config in {p}:\n  ai.provider: Input should be 'copilot'"
+    ):
+        load_config(p)
+
+
+def test_invalid_toml(tmp_path):
+    p = _write_toml(tmp_path, "[general\n")
+    with pytest.raises(ConfigError, match=f"invalid TOML in {p}"):
         load_config(p)
 
 
@@ -193,7 +207,7 @@ def test_ai_extra_field_rejected(tmp_path):
         typo_field = true
         """,
     )
-    with pytest.raises(ValidationError):
+    with pytest.raises(ConfigError):
         load_config(p)
 
 

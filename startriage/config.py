@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Self
 
 import tomli_w
-from pydantic import BaseModel, ConfigDict, ValidationInfo, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, ValidationError, ValidationInfo, field_validator, model_validator
 
 
 class UpdateFilter(StrEnum):
@@ -70,7 +70,11 @@ The model id is passed to the provider as is, look it up at:
   https://openrouter.ai/models"""
 
 
-class AIConfigError(Exception):
+class ConfigError(Exception):
+    """Raised when the configuration cannot be loaded or is invalid."""
+
+
+class AIConfigError(ConfigError):
     """Raised when the [ai] section is not ready to run an AI session."""
 
 
@@ -247,6 +251,8 @@ def _load_toml(path: Path) -> dict:
             return tomllib.load(f)
     except FileNotFoundError:
         return {}
+    except tomllib.TOMLDecodeError as exc:
+        raise ConfigError(f"invalid TOML in {path}: {exc}") from exc
 
 
 def update_user_config(
@@ -322,15 +328,19 @@ def load_config(user_config_path: Path | None) -> StarTriageConfig:
         name: {**default_teams.get(name, {}), **user_teams.get(name, {})} for name in all_team_names
     }
 
-    return StarTriageConfig.model_validate(
-        {
-            "general": merged_general,
-            "ai": merged_ai,
-            "team": merged_teams,
-            "loaded_paths": loaded_paths,
-            "searched_paths": [path],
-        }
-    )
+    try:
+        return StarTriageConfig.model_validate(
+            {
+                "general": merged_general,
+                "ai": merged_ai,
+                "team": merged_teams,
+                "loaded_paths": loaded_paths,
+                "searched_paths": [path],
+            }
+        )
+    except ValidationError as exc:
+        problems = "\n".join(f"  {'.'.join(map(str, e['loc']))}: {e['msg']}" for e in exc.errors())
+        raise ConfigError(f"invalid config in {path}:\n{problems}") from exc
 
 
 def resolve_team_name(team_arg: str | None, config: StarTriageConfig) -> str:
