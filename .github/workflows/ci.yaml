@@ -1,15 +1,25 @@
 name: CI
 
-on: [push, pull_request]
+on:
+  push:
+    # tags run CI through release.yaml
+    branches: ["**"]
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
 
 jobs:
   test:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     # https://canonical-self-hosted-github-runner-docs.readthedocs-hosted.com/en/latest/usage/available_runners/#available-runners
     #runs-on: [self-hosted, linux, X64, noble, small]
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - name: install uv
         uses: astral-sh/setup-uv@v7
         with:
@@ -19,5 +29,6 @@ jobs:
         run: |
           uv sync
           uv run ruff check .
+          uv run ruff format --check .
           uv run ty check .
           uv run pytest .

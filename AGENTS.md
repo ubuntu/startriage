@@ -24,6 +24,10 @@ uv run startriage ...
 uv run pytest
 ```
 
+### Releasing
+- Push a `vX.Y.Z` tag: `.github/workflows/release.yaml` runs CI, builds and publishes to PyPI via trusted publishing (GitHub environment `pypi`)
+- The version comes from the tag (setuptools-scm), never edit it by hand
+
 ## Code Style
 - Lint with `ty`, `ruff`, `ruff format` (line-length 110, target Python 3.12)
 - Import sorting enabled (`I001`)

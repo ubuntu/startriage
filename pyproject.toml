@@ -2,13 +2,19 @@
 name = "startriage"
 dynamic = ["version"]
 description = "Triage Ubuntu bugs, pull requests, forum posts and more"
-license = "GPL-3.0"
+license = "GPL-3.0-or-later"
 license-files = ["LICENSE"]
 maintainers = [
     { name = "Ubuntu Server Team", email = "ubuntu-server@lists.ubuntu.com" },
 ]
-readme = "doc/README.md"
+readme = "README.md"
 requires-python = ">=3.12"
+classifiers = [
+    "Environment :: Console",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Topic :: Software Development :: Bug Tracking",
+]
 dependencies = [
     "aiohttp",
     "pydantic>=2.0",
