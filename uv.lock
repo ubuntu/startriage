@@ -372,7 +372,7 @@ wheels = [
 
 [[package]]
 name = "github-copilot-sdk"
-version = "1.0.15"
+version = "1.0.16"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpx" },
@@ -380,7 +380,7 @@ dependencies = [
     { name = "python-dateutil" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/14/7e/e6e926b3219cb95a501ad87d038c0257cf636d238f81ea44da9ff3db68f2/github_copilot_sdk-1.0.15-py3-none-any.whl", hash = "sha256:419162ec98b4a818c1a0d617fea0dd08345c24c5f2d4c29f38091ebd1b33e630", size = 704307, upload-time = "2026-09-28T19:33:55.654Z" },
+    { url = "https://files.pythonhosted.org/packages/d2/ae/978672b09bfe80c01ce2fdb20d63914c7455c645905087834e058a31dfd5/github_copilot_sdk-1.0.16-py3-none-any.whl", hash = "sha256:fcbc9e2673d5cf3da40c4095fd841d39f04ff2c9b09dfc970b3fb5f962f47a0f", size = 722199, upload-time = "2026-09-30T21:52:23.177Z" },
 ]
 
 [[package]]
@@ -452,16 +452,17 @@ wheels = [
 
 [[package]]
 name = "launchpadlib"
-version = "2.1.0"
+version = "2.2.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httplib2" },
     { name = "lazr-restfulclient" },
     { name = "lazr-uri" },
+    { name = "pysocks" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/30/ec/e659321733decaafe95d4cf964ce360b153de48c5725d5f27cefe97bf5f8/launchpadlib-2.1.0.tar.gz", hash = "sha256:b4c25890bb75050d54c08123d2733156b78a59a2555f5461f69b0e44cd91242f", size = 209860, upload-time = "2025-01-16T17:59:42.055Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/17/05/79115eea3f46a2048552b766d2e031740b53baff5a084d6a3f6318642ffe/launchpadlib-2.2.0.tar.gz", hash = "sha256:d4f7bb6b95739d4667dd6093d410220317b2415b6c2ef5b143379ebc5f5363a9", size = 212890, upload-time = "2026-10-01T07:44:56.46Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/3a/a2/2fbbee98e88322446edc71a9ea662c8bf288e5199777545b4480d09bf3d1/launchpadlib-2.1.0-py3-none-any.whl", hash = "sha256:28ae51a8f09deb6506c7f72e47e21d37b28edba2a0d4a1bc7ebecca35168e2ac", size = 217563, upload-time = "2025-01-16T17:59:38.264Z" },
+    { url = "https://files.pythonhosted.org/packages/88/f3/c822dd9203bf0b2329184fc4d30ea82d54e324fd8fef963b62f6dce79e6d/launchpadlib-2.2.0-py3-none-any.whl", hash = "sha256:43c54ee74b64a6a99e485ffea52c7e695c549daf8babe4ae37c8c0edcb4f2e24", size = 220078, upload-time = "2026-10-01T07:44:54.911Z" },
 ]
 
 [[package]]
@@ -879,6 +880,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/e4/11/b213bebff182584360cb8d17c72c1677fec5c5c228de439e63bcf8ab1c8f/pyparsing-3.3.3.tar.gz", hash = "sha256:928ae7e20211f3b6f3915a72f06a0cfd29ab9d24279dd6346b6b1a7146397d36", size = 1050487, upload-time = "2026-09-20T20:59:05.609Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/38/bb/d215ee7c73b61497b28a5503f9f53523f294fcc936762b7caf90e0c1c2b5/pyparsing-3.3.3-py3-none-any.whl", hash = "sha256:ece8c00a69cf01b45d0b1dedabb469c90d8caf996d4fda40f147627a122849a4", size = 126420, upload-time = "2026-09-20T20:59:04.025Z" },
+]
+
+[[package]]
+name = "pysocks"
+version = "1.7.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/bd/11/293dd436aea955d45fc4e8a35b6ae7270f5b8e00b53cf6c024c83b657a11/PySocks-1.7.1.tar.gz", hash = "sha256:3f8804571ebe159c380ac6de37643bb4685970655d3bba243530d6558b799aa0", size = 284429, upload-time = "2019-09-20T02:07:35.714Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/8d/59/b4572118e098ac8e46e399a1dd0f2d85403ce8bbaad9ec79373ed6badaf9/PySocks-1.7.1-py3-none-any.whl", hash = "sha256:2725bd0a9925919b9b51739eea5f9e2bae91e83288108a9ad338b2e3a4435ee5", size = 16725, upload-time = "2019-09-20T02:06:22.938Z" },
 ]
 
 [[package]]

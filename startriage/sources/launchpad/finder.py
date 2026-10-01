@@ -10,6 +10,7 @@ from pathlib import Path
 import aiohttp
 import debian.deb822
 import platformdirs
+from launchpadlib import __version__ as launchpadlib_version
 from launchpadlib.credentials import (
     AuthorizeRequestTokenWithURL,
     Credentials,
@@ -61,14 +62,16 @@ LP_CONSUMER_NAME = "startriage"
 # read-only access levels in the authorization web UI.
 LP_ACCESS_LEVELS = ["READ_PUBLIC", "READ_PRIVATE"]
 
+# launchpadlib >= 2.2.0 refuses cached credentials of other consumers itself;
+# distro packages (e.g. the snap's stage-packages) may still ship older ones.
+_LP_REUSES_FOREIGN_CREDENTIALS = tuple(int(part) for part in launchpadlib_version.split(".")[:2]) < (2, 2)
 
-def _discard_foreign_credentials(cred_location) -> None:
+
+def _discard_foreign_credentials(cred_location: Path) -> None:
     """Drop a cached credential that belongs to a different OAuth consumer.
 
-    fixed in launchpadlib via https://code.launchpad.net/~jj/launchpadlib/+git/launchpadlib/+merge/505695
-
-    launchpadlib's UnencryptedFileCredentialStore loads whatever consumer is in
-    the file, ignoring the consumer we actually ask for. Older startriage
+    launchpadlib < 2.2.0's UnencryptedFileCredentialStore loads whatever consumer
+    is in the file, ignoring the consumer we actually ask for. Older startriage
     versions logged in with a system-wide desktop consumer (keyed by hostname),
     so a leftover file makes the first API call return 401 and triggers a broken
     mid-session re-auth against the wrong consumer ("Not allowed here" on the
@@ -106,11 +109,12 @@ def connect_launchpad(credentials_file: Path | None = None, interactive: bool = 
     if credentials_file is None:
         credentials_file = platformdirs.user_data_path("startriage") / "lp_creds"
     credentials_file.parent.mkdir(parents=True, exist_ok=True)
-    _discard_foreign_credentials(credentials_file)
+    if _LP_REUSES_FOREIGN_CREDENTIALS:
+        _discard_foreign_credentials(credentials_file)
     credential_store = UnencryptedFileCredentialStore(str(credentials_file))
 
-    # custom engine for our consumer name is a workaround until
-    # https://code.launchpad.net/~jj/launchpadlib/+git/launchpadlib/+merge/505695 is released
+    # an explicit engine prints the authorization URL instead of opening a browser,
+    # and makes launchpadlib < 2.2.0 honor our consumer name and access levels
     engine_cls = AuthorizeRequestTokenWithURL if interactive else _NoAuthorization
 
     logger.debug("logging into launchpad...")
