@@ -13,7 +13,7 @@ from typing import Any
 import aiohttp
 
 from ...config import StarTriageConfig
-from ...output import OutputConfig, OutputFormat, TriageResult, hyperlink
+from ...output import Flag, Link, OutputConfig, OutputFormat, ReportItem, TriageResult, hyperlink
 from ...savebugs import BugPersistor
 from ...source import FetchMode, TaskFilterOptions
 from .finder import DiscourseFinder
@@ -207,6 +207,26 @@ class DiscourseTriage(TriageResult):
 
     async def record(self, persistor: BugPersistor) -> None:
         pass  # no bugs to record, just forum comments
+
+    async def report_items(self, persistor: BugPersistor | None) -> list[ReportItem]:
+        items = []
+        for result in self.results:
+            for activity in result.topics:
+                replies = sum(p.status != PostStatus.UNCHANGED for p in activity.posts)
+                items.append(
+                    ReportItem(
+                        source="discourse",
+                        key=str(activity.topic.get_id()),
+                        label=f"topic {activity.topic.get_id()}",
+                        url=activity.url,
+                        title=activity.topic.get_name() or "",
+                        context=[Link(result.category_name)],
+                        status=f"{replies} changed" if replies else str(activity.status),
+                        updated=activity.date,
+                        flags={Flag.NEW} if activity.status == PostStatus.NEW else set(),
+                    )
+                )
+        return items
 
     @staticmethod
     def _content_preview(post: DiscoursePost, max_len: int = 50) -> str:

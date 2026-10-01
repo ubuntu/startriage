@@ -76,16 +76,23 @@ def _gh_auth_token() -> str | None:
     return None
 
 
-async def github_device_flow_login() -> str:
-    """Authenticate via GitHub OAuth Device Flow and return an access token."""
+async def github_device_flow_login(private: bool = False) -> str:
+    """
+    Authenticate via GitHub OAuth Device Flow and return an access token.
+
+    Public repos need no scope; ``private`` requests ``read:org`` to see the members of
+    ``github_team``, which organizations may require an admin to approve.
+    """
     client_id = os.environ.get("GITHUB_OAUTH_CLIENT_ID", _GITHUB_OAUTH_CLIENT_ID)
+    form = {"client_id": client_id}
+    if private:
+        form["scope"] = "read:org"
 
     async with aiohttp.ClientSession() as session:
-        scope = ""  # Empty = public read only; "repo" for private repos
         async with session.post(
             _GITHUB_DEVICE_CODE_URL,
             headers={"Accept": "application/json"},
-            data={"client_id": client_id, "scope": scope},
+            data=form,
         ) as resp:
             data = await resp.json()
             if "error" in data:

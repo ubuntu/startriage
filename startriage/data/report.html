@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>$title</title>
+<base target="_blank">
+<style>
+:root {
+  --orange: #e95420;
+  --aubergine: #772953;
+  --warm-grey: #aea79f;
+  --text: #111;
+  --muted: #666;
+  --line: #e5e5e5;
+  --zebra: #f7f7f7;
+  --open: #c7162b;
+  --closed: #0e8420;
+  --unapproved: #24598f;
+  --border: 1px solid var(--warm-grey);
+  --radius: 2px;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body {
+  margin: 0;
+  font: 15px/1.4 Ubuntu, "Ubuntu Sans", "Segoe UI", sans-serif;
+  color: var(--text);
+}
+a { color: var(--text); }
+a:hover { color: var(--orange); }
+button, summary { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+.btn { padding: 0.25rem 0.8rem; border: var(--border); border-radius: var(--radius); background: #fff; }
+.btn:hover:enabled, .btn:hover { border-color: var(--orange); color: var(--orange); }
+.btn:disabled { opacity: 0.4; cursor: default; }
+.reveal { opacity: 0; }
+tr:hover .reveal, .reveal:focus { opacity: 0.6; }
+.reveal:hover, tr.commenting .reveal { opacity: 1; }
+header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem 1rem;
+  padding: 0.6rem 1.5rem;
+  background: #fff;
+  border-top: 4px solid var(--orange);
+  border-bottom: 1px solid var(--line);
+}
+h1 { margin: 0; font-size: 1.3rem; font-weight: 300; }
+.subtitle { color: var(--muted); }
+.controls { margin-left: auto; display: flex; gap: 0.5rem; align-items: baseline; }
+#left { color: var(--muted); margin-right: 0.5rem; }
+.menu { position: relative; }
+.menu summary { list-style: none; }
+.menu summary::after { content: " \25be"; }
+.menu[open] summary { border-color: var(--orange); }
+.menu-items {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 2px);
+  display: flex;
+  flex-direction: column;
+  min-width: 100%;
+  background: #fff;
+  border: var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+}
+.menu-items button { padding: 0.25rem 0.8rem; text-align: left; white-space: nowrap; }
+.menu-items button:hover { color: var(--orange); }
+main { padding: 0 1.5rem 3rem; }
+h2 {
+  margin: 1.8rem 0 0.4rem;
+  font-size: 1.15rem;
+  font-weight: 400;
+  color: var(--aubergine);
+}
+.count {
+  display: inline-block;
+  min-width: 1.6em;
+  padding: 0 0.4em;
+  border-radius: 1em;
+  background: var(--aubergine);
+  color: #fff;
+  font-size: 0.8rem;
+  text-align: center;
+  vertical-align: middle;
+}
+section.done h2 { color: var(--warm-grey); }
+section.done .count { background: var(--warm-grey); }
+section.done table { display: none; }
+/* one grid for all tables, so their columns line up: each as wide as its widest cell, the title takes the rest */
+main { display: grid; grid-template-columns: repeat(8, auto) minmax(0, 1fr); }
+section, table, thead, tbody, tr { display: grid; grid-template-columns: subgrid; grid-column: 1 / -1; }
+main > p, h2 { grid-column: 1 / -1; }
+th {
+  text-align: left;
+  font-weight: 400;
+  font-size: 0.8rem;
+  color: var(--muted);
+  border-bottom: var(--border);
+  padding: 0.2rem 0.5rem;
+}
+td { padding: 0.3rem 0.5rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+tbody tr:nth-child(even) { background: var(--zebra); }
+tbody tr:hover { background: #fdf0eb; }
+tbody tr { cursor: text; }
+tbody a, tbody button { cursor: pointer; }
+td:not(:last-child) { max-width: 14rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+button.check {
+  width: 1.5rem;
+  height: 1.5rem;
+  border: var(--border);
+  border-radius: 50%;
+  background: #fff;
+  color: transparent;
+  font-size: 0.9rem;
+  line-height: 1;
+}
+button.check:hover { border-color: var(--orange); background: var(--orange); color: #fff; }
+.rel { font-family: "Ubuntu Mono", monospace; font-weight: bold; color: var(--muted); }
+.rel.open { color: var(--open); }
+.rel.closed { color: var(--closed); }
+.rel.unapproved { color: var(--unapproved); }
+.title { display: flex; align-items: baseline; gap: 0.5rem; }
+.title > span:first-child { flex: 1; }
+.chips { display: flex; gap: 0.3rem; }
+.chip {
+  padding: 0 0.4rem;
+  border: var(--border);
+  border-radius: var(--radius);
+  font-size: 0.75rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.further, .refs { font-size: 0.8rem; color: var(--muted); }
+.refs a { color: inherit; }
+textarea.comment {
+  display: block;
+  width: 100%;
+  margin-top: 0.2rem;
+  padding: 0.15rem 0.3rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
+  font: inherit;
+  font-size: 0.9rem;
+  resize: none;
+  overflow: hidden;
+}
+textarea.comment:focus { outline: none; border-color: var(--orange); background: #fff; }
+button.add-comment { padding: 0 0.2rem; font-size: 0.8rem; }
+.error { color: var(--open); }
+footer { padding: 1rem 1.5rem; color: var(--muted); font-size: 0.8rem; }
+@media print {
+  header { position: static; }
+  .controls, .reveal, td:first-child { display: none; }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>$title</h1>
+  <span class="subtitle">$subtitle</span>
+  <div class="controls">
+    <span id="left"></span>
+    <button id="restore-last" class="btn" disabled>Restore last</button>
+    <button id="restore-all" class="btn" disabled>Restore all</button>
+    <details class="menu" title="Commented items as markdown report, e.g. for Discourse">
+      <summary class="btn">Markdown</summary>
+      <div class="menu-items">
+        <button id="copy-md">📋 Copy</button>
+        <button id="save-md">💾 Save</button>
+      </div>
+    </details>
+  </div>
+</header>
+<main>
+$body
+</main>
+<footer>Generated $generated by <a href="https://github.com/ubuntu/startriage">startriage</a></footer>
+<script>
+(function () {
+  "use strict";
+  var PREFIX = "startriage:";
+  var MAX_AGE = 31 * 24 * 3600 * 1000;
+  var key = PREFIX + "$report_id";
+  var stack = [];
+  var comments = {};
+
+  function save() {
+    try {
+      localStorage.setItem(key, JSON.stringify({ time: Date.now(), hidden: stack, comments: comments }));
+    } catch (e) {
+      // storage unavailable, e.g. disabled for file:// urls
+    }
+  }
+
+  function load() {
+    try {
+      for (var i = localStorage.length - 1; i >= 0; i--) {
+        var k = localStorage.key(i);
+        if (k.indexOf(PREFIX) !== 0 || k === key) continue;
+        var entry = JSON.parse(localStorage.getItem(k) || "{}");
+        if (!entry.time || Date.now() - entry.time > MAX_AGE) localStorage.removeItem(k);
+      }
+      return JSON.parse(localStorage.getItem(key) || "{}");
+    } catch (e) {
+      return {};
+    }
+  }
+
+  var TEMPLATE = $markdown;
+
+  // The template, reduced to the commented items, each with its comment at the end of its block.
+  // Section headings stay only if they contain such an item.
+  function markdown() {
+    var pending = {};  // url link -> comment
+    var labels = {};
+    document.querySelectorAll("tbody tr").forEach(function (row) {
+      var comment = (comments[row.id] || "").trim();
+      if (!comment) return;
+      var link = "](" + row.dataset.url + ")";
+      pending[link] = comment;
+      labels[link] = row.querySelector("td:nth-child(2) a").textContent;
+    });
+
+    // blocks: a heading line and the lines up to the next heading
+    var blocks = [];
+    TEMPLATE.split("\n").forEach(function (line) {
+      var match = /^(#+) /.exec(line);
+      if (match || !blocks.length) blocks.push({ level: match ? match[1].length : 0, lines: [] });
+      blocks[blocks.length - 1].lines.push(line);
+    });
+
+    var out = [];
+    var headers = [];  // enclosing section headings not yet written
+    blocks.forEach(function (block, index) {
+      if (index === 0) {
+        out = out.concat(block.lines);  // the title
+        return;
+      }
+      var link = Object.keys(pending).find(function (l) { return block.lines[0].includes(l); });
+      if (link === undefined && block.level < 4) {
+        while (headers.length && headers[headers.length - 1].level >= block.level) headers.pop();
+        headers.push(block);
+        return;
+      }
+      if (link === undefined) return;
+      headers.forEach(function (header) { out = out.concat(header.lines); });
+      headers = [];
+      out = out.concat(block.lines.join("\n").trimEnd().split("\n"), "", pending[link], "");
+      delete pending[link];
+    });
+
+    // commented items the template doesn't have
+    Object.keys(pending).forEach(function (link) {
+      out.push("", "#### [" + labels[link] + link, "", pending[link], "");
+    });
+    return out.join("\n").replace(/\n{3,}/g, "\n\n").trim() + "\n";
+  }
+
+  function grow(textarea) {
+    textarea.style.height = "auto";
+    textarea.style.height = textarea.scrollHeight + "px";
+  }
+
+  function flash(button, text) {
+    var old = button.textContent;
+    button.textContent = text;
+    setTimeout(function () { button.textContent = old; }, 1500);
+  }
+
+  function update() {
+    var total = 0;
+    document.querySelectorAll("section").forEach(function (section) {
+      var visible = section.querySelectorAll("tbody tr:not([hidden])").length;
+      section.querySelector(".count").textContent = visible;
+      section.classList.toggle("done", visible === 0);
+      total += visible;
+    });
+    document.getElementById("left").textContent = total + " left";
+    document.getElementById("restore-last").disabled = stack.length === 0;
+    document.getElementById("restore-all").disabled = stack.length === 0;
+  }
+
+  function setHidden(id, hidden) {
+    var row = document.getElementById(id);
+    if (row) row.hidden = hidden;
+  }
+
+  document.querySelectorAll("button.check").forEach(function (button) {
+    button.addEventListener("click", function () {
+      var id = button.closest("tr").id;
+      setHidden(id, true);
+      stack.push(id);
+      save();
+      update();
+    });
+  });
+
+  document.getElementById("restore-last").addEventListener("click", function () {
+    setHidden(stack.pop(), false);
+    save();
+    update();
+  });
+
+  document.getElementById("restore-all").addEventListener("click", function () {
+    stack.forEach(function (id) { setHidden(id, false); });
+    stack = [];
+    save();
+    update();
+  });
+
+  var menu = document.querySelector(".menu");
+  var menuLabel = menu.querySelector("summary");
+
+  document.addEventListener("click", function (event) {
+    if (!menu.contains(event.target)) menu.open = false;
+  });
+
+  document.getElementById("copy-md").addEventListener("click", function () {
+    menu.open = false;
+    navigator.clipboard.writeText(markdown()).then(
+      function () { flash(menuLabel, "Copied"); },
+      function () { flash(menuLabel, "Copy failed"); }
+    );
+  });
+
+  document.getElementById("save-md").addEventListener("click", function () {
+    menu.open = false;
+    var link = document.createElement("a");
+    link.href = URL.createObjectURL(new Blob([markdown()], { type: "text/markdown" }));
+    link.download = "$filename";
+    link.click();
+    URL.revokeObjectURL(link.href);
+  });
+
+  var saved = load();
+  comments = saved.comments || {};
+
+  document.querySelectorAll("textarea.comment").forEach(function (textarea) {
+    var row = textarea.closest("tr");
+    var id = row.id;
+
+    function show(visible) {
+      textarea.hidden = !visible;
+      row.classList.toggle("commenting", visible);
+      grow(textarea);
+    }
+
+    textarea.value = comments[id] || "";
+    show(!!textarea.value);
+    textarea.addEventListener("input", function () {
+      if (textarea.value) comments[id] = textarea.value;
+      else delete comments[id];
+      grow(textarea);
+      save();
+    });
+    textarea.addEventListener("blur", function () {
+      if (!textarea.value) show(false);
+    });
+    // anywhere on the row but its links and buttons, unless selecting text
+    row.addEventListener("click", function (event) {
+      if (event.target.closest("a, button.check, textarea")) return;
+      if (String(window.getSelection())) return;
+      show(true);
+      textarea.focus();
+    });
+  });
+
+  (saved.hidden || []).forEach(function (id) {
+    if (document.getElementById(id)) {
+      setHidden(id, true);
+      stack.push(id);
+    }
+  });
+  update();
+})();
+</script>
+</body>
+</html>

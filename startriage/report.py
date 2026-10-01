@@ -8,10 +8,11 @@ import logging
 import sys
 import traceback
 from collections.abc import Mapping
-from datetime import time
+from datetime import date, time
 
 from .config import StarTriageConfig
 from .dates import compact_date_range, reverse_triage_task_day
+from .htmlreport import write_report
 from .output import OutputConfig, OutputFormat, TriageResult, json_default
 from .source import FetchMode, TaskFilterOptions
 from .spinner import Spinner
@@ -74,29 +75,27 @@ async def triage(
 
     results = await _fetch_and_render(config, opts, FetchMode.triage, output_cfg)
 
-    # create markdown template
-    if output_cfg.markdown_path:
-        buf = io.StringIO()
+    if output_cfg.markdown_path or output_cfg.html_path:
+        markdown = await _triage_markdown(results, range)
 
-        if range:
-            buf.write(f"# Triage of changes on{range}\n")
-        else:
-            buf.write("# Triage\n")
+        if output_cfg.markdown_path:
+            output_cfg.markdown_path.write_text(markdown, encoding="utf-8")
+            logging.info("Markdown written to %s", output_cfg.markdown_path)
 
-        md_cfg = OutputConfig(fmt=OutputFormat.MARKDOWN, out=buf, open_in_browser=False, terminal_links=False)
-
-        # skip sources that failed to fetch
-        for source in _MARKDOWN_SOURCES:
-            result = results.get(source)
-            if result is None or result.error is not None:
-                continue
-            await result.print_section(md_cfg)
-            buf.write("\n")
-
-        with output_cfg.markdown_path.open("w", encoding="utf-8") as fh:
-            fh.write(buf.getvalue())
-
-        logging.info("Markdown written to %s", output_cfg.markdown_path)
+        if output_cfg.html_path:
+            subtitle = f"team {opts.team}" + (f", items updated {range_verbose}" if range_verbose else "")
+            days = dict.fromkeys(d.date().isoformat() for d in (opts.start, opts.end) if d)
+            filename = "-".join(["triage", *days]) + ".md"
+            await write_report(
+                output_cfg.html_path,
+                results,
+                FetchMode.triage,
+                f"Triage{range}",
+                subtitle,
+                markdown=markdown,
+                filename=filename,
+            )
+            logging.info("HTML written to %s", output_cfg.html_path)
 
     return results
 
@@ -119,6 +118,18 @@ async def todo(
 
     results = await _fetch_and_render(config, opts, mode, output_cfg)
 
+    # before saving, which would make today's file the next compare file
+    if output_cfg.html_path:
+        persistor = output_cfg.bug_persistor
+        subtitle = f"team {opts.team}"
+        if persistor and persistor.compare_path:
+            subtitle += f", compared with {persistor.compare_path.name}"
+        filename = f"todo-{date.today().isoformat()}.md"
+        await write_report(
+            output_cfg.html_path, results, mode, "Bug housekeeping", subtitle, persistor, filename=filename
+        )
+        logging.info("HTML written to %s", output_cfg.html_path)
+
     if output_cfg.bug_persistor is not None:
         for result in results.values():
             await result.record(output_cfg.bug_persistor)
@@ -126,6 +137,24 @@ async def todo(
         output_cfg.bug_persistor.save()
 
     return results
+
+
+async def _triage_markdown(results: Mapping[str, TriageResult], range: str) -> str:
+    """Markdown template of the triage report, e.g. for a Discourse post."""
+    buf = io.StringIO()
+    buf.write(f"# Triage of changes on{range}\n" if range else "# Triage\n")
+
+    md_cfg = OutputConfig(fmt=OutputFormat.MARKDOWN, out=buf, open_in_browser=False, terminal_links=False)
+
+    # skip sources that failed to fetch
+    for source in _MARKDOWN_SOURCES:
+        result = results.get(source)
+        if result is None or result.error is not None:
+            continue
+        await result.print_section(md_cfg)
+        buf.write("\n")
+
+    return buf.getvalue()
 
 
 def print_fetch_errors(results: Mapping[str, TriageResult]) -> bool:

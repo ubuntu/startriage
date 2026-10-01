@@ -38,6 +38,8 @@ startriage triage -i 2026-04-14:2026-04-18  # range is inclusive
 
 # Housekeeping: server-todo tagged bugs with assignees
 startriage todo
+# Also write a checklist page for the housekeeping meeting
+startriage todo --html ~/todo.html
 
 # Subscription backlog (ubuntu-server subscribed bugs)
 startriage todo --subscribed
@@ -56,6 +58,7 @@ startriage todo --subscribed
 | `--open -o` | Open results in the web browser |
 | `--fullurls` | Print full URLs instead of terminal hyperlinks |
 | `--markdown PATH` | Write parallel markdown output (for pasting into Discourse posts) |
+| `--html PATH` | Write a single-page html report whose rows can be checked off |
 
 Run `startriage triage --help` for the full option reference, including the bug flags legend.
 
@@ -148,7 +151,7 @@ adjust [the defaults](startriage/data/defaults.toml) with your user configuratio
 
 ```toml
 [general]
-lp_triage_updates = "theirs"   # theirs | ours | all
+triage_updates = "theirs"   # theirs | ours | all
 default_team = "ubuntu-server"
 savebugs_dir = "~/your-path-to-persisting-bug-progress"
 
@@ -159,6 +162,8 @@ lp_ignore_packages = ["linux", "linux-meta"]
 discourse_categories = ["project/server"]
 discourse_triage_categories = ["project/server/server-triage"]  # suppress triage-post main entries; show replies only
 github_repos = ["canonical/ubuntu-server-documentation"]
+# members of this GitHub team count as the team: other people's comments are "external updates"
+github_team = "canonical/ubuntu-server-distro"
 proposed_migration_teams = ["ubuntu-server"]
 
 # other team definitions

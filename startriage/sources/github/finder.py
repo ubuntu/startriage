@@ -22,9 +22,10 @@ _ITEM_FIELDS = """\
       pageInfo { hasNextPage endCursor }
       nodes {
         number title url state createdAt updatedAt closedAt lastEditedAt
+        author { login }
         labels(first: 20) { nodes { name } }
         assignees(first: 1) { nodes { login } }
-        comments(last: 1) { nodes { updatedAt } }
+        comments(last: 1) { nodes { updatedAt author { login } } }
         timelineItems(itemTypes: [REOPENED_EVENT], last: 1) {
           nodes { ... on ReopenedEvent { createdAt } }
         }
@@ -77,6 +78,37 @@ async def _graphql(
 
         return data["data"]
     raise RuntimeError("GitHub GraphQL: unreachable")
+
+
+_TEAM_MEMBERS_QUERY = """\
+query($org: String!, $team: String!, $after: String) {
+  organization(login: $org) {
+    team(slug: $team) {
+      members(first: 100, after: $after) { pageInfo { hasNextPage endCursor } nodes { login } }
+    }
+  }
+}"""
+
+
+async def fetch_team_members(session: aiohttp.ClientSession, team: str) -> set[str] | None:
+    """Logins of the members of *team* (``org/team-slug``), including child teams.
+
+    None if the team is not visible: it needs a token with the ``read:org`` scope,
+    or a fine-grained token with the organization's "Members: read" permission.
+    """
+    org, slug = team.split("/", 1)
+    members: set[str] = set()
+    after = None
+    while True:
+        data = await _graphql(session, _TEAM_MEMBERS_QUERY, {"org": org, "team": slug, "after": after})
+        team_data = (data.get("organization") or {}).get("team")
+        if team_data is None:
+            return None
+        conn = team_data["members"]
+        members.update(node["login"] for node in conn["nodes"])
+        if not conn["pageInfo"]["hasNextPage"]:
+            return members
+        after = conn["pageInfo"]["endCursor"]
 
 
 def _is_actionable(

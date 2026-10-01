@@ -1,7 +1,7 @@
 [general]
 lp_expire_level1_days = 60
 lp_expire_level2_days = 180
-lp_triage_updates = "theirs"
+triage_updates = "theirs"
 #savebugs_dir = "~/src/ubuntu/mnt/savebugs/"
 #proposed_min_age = 4
 #default_team = # automatic if 1 defined
@@ -50,4 +50,5 @@ github_repos = [
 ]
 github_todo_labels = ["server-todo"]
 github_ignore_labels = ["server-triage-ignore"]
+github_team = "canonical/ubuntu-server-distro"
 proposed_migration_teams = ["ubuntu-server"]

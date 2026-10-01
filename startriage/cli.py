@@ -66,6 +66,14 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     output_p.add_argument(
+        "--html",
+        metavar="PATH",
+        help=(
+            "Also write a single-page html report to PATH, with rows to check off during a meeting. "
+            "As a snap, /tmp is private; use a path under your home directory."
+        ),
+    )
+    output_p.add_argument(
         "--format",
         choices=OutputFormat,
         default=OutputFormat.TERMINAL,
@@ -191,7 +199,10 @@ GREEN = done
     triage_p.add_argument(
         "--update",
         choices=UpdateFilter,
-        help="Filter by who last updated bugs (default: theirs)",
+        help=(
+            "Filter by who last updated bugs (default: general.triage_updates); "
+            "GitHub items by their last comment, only if team.github_team can be read"
+        ),
     )
     triage_p.add_argument(
         "--proposed-min-age",
@@ -304,6 +315,12 @@ GREEN = done
         help="launchpad: store credentials in general.lp_credentials_file; "
         "github: store a token via device flow in general.github_token",
     )
+    login_p.add_argument(
+        "--private",
+        action="store_true",
+        help="github: also request the read:org scope to recognize github_team members "
+        "(the organization may require admin approval)",
+    )
     login_p.set_defaults(func=_run_login)
 
     return parser
@@ -347,6 +364,7 @@ def _outputcfg_from_args(args: argparse.Namespace, persistor: BugPersistor | Non
         open_in_browser=args.open_in_browser,
         terminal_links=not args.fullurls,
         markdown_path=Path(args.markdown) if args.markdown else None,
+        html_path=Path(args.html) if args.html else None,
         bug_persistor=persistor,
     )
 
@@ -444,7 +462,7 @@ async def _run_login(args: argparse.Namespace, config: StarTriageConfig) -> None
             name = login_launchpad(config.general.lp_credentials_file)
             print(f"Logged into Launchpad as {name}")
         case "github":
-            token = await github_device_flow_login()
+            token = await github_device_flow_login(private=args.private)
             path = update_user_config(
                 {"general": {"github_token": token}}, config_path=args.config, sensitive=True
             )

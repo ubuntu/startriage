@@ -46,7 +46,7 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 packages = {find = {where = ["."]}}
-package-data = {"startriage" = ["data/*.toml", "data/*.md"]}
+package-data = {"startriage" = ["data/*.toml", "data/*.md", "data/*.html"]}
 
 [tool.setuptools_scm]
 version_scheme = "only-version"

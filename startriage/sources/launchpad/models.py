@@ -9,7 +9,7 @@ from typing import Any
 
 from launchpadlib.launchpad import Launchpad
 
-from startriage.output import hyperlink, truncate_string
+from startriage.output import Flag, Link, ReportItem, hyperlink, truncate_string
 
 DISTRIBUTION_RESOURCE_TYPE_LINK = "https://api.launchpad.net/devel/#distribution"
 DISTRIBUTION_SOURCE_PACKAGE_RESOURCE_TYPE_LINK = (
@@ -229,22 +229,43 @@ class Task:
     def _is_verification_done(self) -> bool:
         return any("verification-done-" in t for t in self.tags)
 
+    def release_states(self, ctx: RenderContext) -> dict[str, str]:
+        """State of each series task: closed, unapproved, open or pending.
+
+        Order: devel first, then stable series newest-first.
+        """
+        states = {}
+        for series, lp_task in self._sibling_tasks.items():
+            if lp_task.status in ctx.nowork_statuses:
+                states[series] = "closed"
+            elif self.is_in_unapproved(ctx):
+                states[series] = "unapproved"
+            elif lp_task.status in ctx.open_statuses:
+                states[series] = "open"
+            else:
+                states[series] = "pending"
+        return states
+
+    def _release_letters(self, ctx: RenderContext) -> list[tuple[str, str]]:
+        """(letter, state) per series task, e.g. ``("D", "open")`` for the devel series."""
+        return [
+            ("D" if series[0] == "-" else series[0].upper(), state)
+            for series, state in self.release_states(ctx).items()
+        ]
+
     def _release_chars(self, ctx: RenderContext) -> list[str]:
         """Return one element per active series task.
         Each element is one distro release, and the text can contain an ANSI color code.
-        Order: devel first, then stable series newest-first.
         """
-        chars = []
-        for series, lp_task in self._sibling_tasks.items():
-            char = "D" if series[0] == "-" else series[0].upper()
-            if lp_task.status in ctx.nowork_statuses:
-                char = mark(char, COLOR_STATUS_DONE)
-            elif self.is_in_unapproved(ctx):
-                char = mark(char, COLOR_STATUS_WAITOTHER)
-            elif lp_task.status in ctx.open_statuses:
-                char = mark(char, COLOR_STATUS_OPEN)
-            chars.append(char)
-        return chars
+        colors = {
+            "closed": COLOR_STATUS_DONE,
+            "unapproved": COLOR_STATUS_WAITOTHER,
+            "open": COLOR_STATUS_OPEN,
+        }
+        return [
+            mark(char, colors[state]) if state in colors else char
+            for char, state in self._release_letters(ctx)
+        ]
 
     def release_tasks_str(self, ctx: RenderContext, width: int = 0) -> str:
         chars = self._release_chars(ctx)
@@ -366,17 +387,37 @@ class Task:
     def sort_date(self):
         return self.date_last_updated
 
+    def report_flags(self, ctx: RenderContext) -> set[Flag]:
+        checks = {
+            Flag.SUBSCRIBED: self.subscribed,
+            Flag.EXTERNAL: not self.last_activity_ours,
+            Flag.RECENT: self._is_updated(ctx),
+            Flag.OLD: self._is_old(ctx),
+            Flag.EXPIRING: self.expiring,
+            Flag.VERIFICATION_NEEDED: self._is_verification_needed(),
+            Flag.VERIFICATION_DONE: self._is_verification_done(),
+        }
+        return {flag for flag, check in checks.items() if check}
+
+    def to_report_item(self, ctx: RenderContext, further: list[Task]) -> ReportItem:
+        """This task as report row; *further* are the other tasks of the same bug."""
+        return ReportItem(
+            source="launchpad",
+            key=self.number,
+            label=self.bug_reference,
+            url=self.url,
+            title=self.short_title,
+            context=[Link(self.src, _LP_SOURCE_URL.format(pkg=self.src))],
+            status=self.status,
+            importance=self.importance,
+            assignees=[Link(a, _LP_USER_URL.format(user=a)) for a in self.all_assignees],
+            updated=self.date_last_updated,
+            releases=self._release_letters(ctx),
+            further=[t.compose_dup(extended=True) for t in further],
+            flags=self.report_flags(ctx),
+        )
+
     def to_dict(self, ctx: RenderContext) -> dict:
-        sibling_status = {}
-        for series, lp_task in self._sibling_tasks.items():
-            if lp_task.status in ctx.nowork_statuses:
-                sibling_status[series] = "closed"
-            elif self.is_in_unapproved(ctx):
-                sibling_status[series] = "unapproved"
-            elif lp_task.status in ctx.open_statuses:
-                sibling_status[series] = "open"
-            else:
-                sibling_status[series] = "pending"
         return {
             "url": self.url,
             "bug_reference": self.bug_reference,
@@ -400,7 +441,7 @@ class Task:
             "is_old": self._is_old(ctx),
             "is_verification_needed": self._is_verification_needed(),
             "is_verification_done": self._is_verification_done(),
-            "sibling_task_status": sibling_status,
+            "sibling_task_status": self.release_states(ctx),
         }
 
     def to_agent_payload(self) -> dict[str, Any]:

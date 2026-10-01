@@ -17,8 +17,10 @@ from lazr.restfulclient.errors import ServerError
 from ...config import GeneralConfig, StarTriageConfig, TeamConfig
 from ...output import (
     FailedTriageResult,
+    Flag,
     OutputConfig,
     OutputFormat,
+    ReportItem,
     TriageResult,
     hyperlink,
     truncate_string,
@@ -176,6 +178,33 @@ class LaunchpadTriage(TriageResult):
             "expire_level2": tasks(self.tasks.expire_level2),
         }
 
+    async def report_items(self, persistor: BugPersistor | None) -> list[ReportItem]:
+        former = persistor.former_bugs("launchpad") if persistor else set()
+        return await asyncio.to_thread(self._report_items, former)
+
+    def _report_items(self, former: set[str]) -> list[ReportItem]:
+        ctx = self._render_context()
+        items: dict[str, ReportItem] = {}
+
+        def add(tasks: list[Task], *flags: Flag) -> None:
+            for primary, further in _group_by_bug(sorted(tasks, key=Task.sort_key), ctx):
+                if primary.number in items:
+                    continue
+                item = primary.to_report_item(ctx, further)
+                item.flags.update(flags)
+                if former and primary.number not in former:
+                    item.flags.add(Flag.NEW)
+                items[primary.number] = item
+
+        add(self.tasks.freezer_tasks, Flag.FREEZER)
+        add(self.tasks.tasks)
+        add(self.tasks.expire_level1 + self.tasks.expire_level2)
+
+        gone = sorted(number for number in former if number not in items)
+        add(_bugs_to_tasks(gone, self.tasks.lp), Flag.GONE)
+
+        return list(items.values())
+
     def _render_context(self) -> RenderContext:
         return RenderContext(
             nowork_statuses=self.tasks.nowork_statuses,
@@ -218,18 +247,11 @@ async def _print_bugs(
     if cfg.fmt == OutputFormat.TERMINAL:
         print(Task.get_table_header(bugid_len, extended=extended), file=cfg.out)
 
-    # Group tasks by bug number, preserving the global sort order of first occurrence.
-    # Within each group, sort by actionability so the most-actionable task is primary;
-    # the rest are listed as a short "further" line immediately below.
-    ordered_numbers: list[str] = list(dict.fromkeys(t.number for t in sorted_tasks))
-    groups: dict[str, list[Task]] = {n: [] for n in ordered_numbers}
-    for task in sorted_tasks:
-        groups[task.number].append(task)
+    grouped = _group_by_bug(sorted_tasks, ctx)
+    ordered_numbers = [primary.number for primary, _ in grouped]
 
-    for number in ordered_numbers:
-        group = sorted(groups[number], key=lambda t: t.actionability_rank(ctx))
-        primary, further_tasks = group[0], group[1:]
-
+    for primary, further_tasks in grouped:
+        number = primary.number
         newbug = bool(former_bugs and number not in former_bugs)
 
         match cfg.fmt:
@@ -259,15 +281,30 @@ async def _print_bugs(
                 raise NotImplementedError
 
     if cfg.open_in_browser:
-        for number in ordered_numbers:
-            url = groups[number][0].url
-            webbrowser.open_new_tab(url)
+        for primary, _ in grouped:
+            webbrowser.open_new_tab(primary.url)
             await asyncio.sleep(0.2)
 
     if cfg.fmt == OutputFormat.TERMINAL:
         print(file=cfg.out)  # blank line after bugs for visual separation
 
     return ordered_numbers
+
+
+def _group_by_bug(sorted_tasks: list[Task], ctx: RenderContext) -> list[tuple[Task, list[Task]]]:
+    """Group tasks by bug number in order of first occurrence: (primary, further tasks).
+
+    The most actionable task of a bug is its primary one; the rest are listed briefly below it.
+    """
+    groups: dict[str, list[Task]] = {}
+    for task in sorted_tasks:
+        groups.setdefault(task.number, []).append(task)
+
+    result = []
+    for group in groups.values():
+        primary, *further = sorted(group, key=lambda t: t.actionability_rank(ctx))
+        result.append((primary, further))
+    return result
 
 
 def _bugs_to_tasks(bug_numbers: list[str], lp: Launchpad) -> list[Task]:
@@ -333,7 +370,7 @@ async def find(
     mode: FetchMode,
 ) -> TriageResult:
     """Fetch Launchpad bugs."""
-    effective_update_filter = filter.update_filter or config.general.lp_triage_updates
+    effective_update_filter = filter.update_filter or config.general.triage_updates
 
     team_config = config.get_team(filter.team)
 

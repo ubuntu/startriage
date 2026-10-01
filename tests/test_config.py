@@ -118,12 +118,23 @@ def test_get_team_unknown(tmp_path):
         config.get_team("ubuntu-bogus")
 
 
-def test_invalid_lp_triage_updates_filter(tmp_path):
+def test_lp_triage_updates_renamed(tmp_path):
     p = _write_toml(
         tmp_path,
         """\
         [general]
-        lp_triage_updates = "invalid_value"
+        lp_triage_updates = "all"
+        """,
+    )
+    assert load_config(p).general.triage_updates == "all"
+
+
+def test_invalid_triage_updates_filter(tmp_path):
+    p = _write_toml(
+        tmp_path,
+        """\
+        [general]
+        triage_updates = "invalid_value"
         """,
     )
     with pytest.raises(ConfigError):

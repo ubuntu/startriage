@@ -147,7 +147,7 @@ class GeneralConfig(BaseModel):
     lp_expire_level1_days: int = 60
     lp_expire_level2_days: int = 180
     lp_extended: bool | None = None
-    lp_triage_updates: UpdateFilter = UpdateFilter.theirs
+    triage_updates: UpdateFilter = UpdateFilter.theirs
     savebugs_dir: Path | None = None
     default_team: str | None = None
     proposed_min_age: int = 4
@@ -194,6 +194,7 @@ class TeamConfig(BaseModel):
     github_ignore_labels: list[str] | None = None  # overridden by github_repos[*].ignore_labels
     # TODO: github_watch_labels: list[str] | None = None  # overridden by github_repos[*].watch_labels
     github_repos: list[GithubRepoConfig] = []
+    github_team: str | None = None  # org/team-slug, whose activity counts as ours
     proposed_migration_teams: list[str] = []
 
     @field_validator("github_repos", mode="before")
@@ -314,8 +315,11 @@ def load_config(user_config_path: Path | None) -> StarTriageConfig:
     if user:
         loaded_paths.append(path)
 
-    # Merge general section
-    merged_general = {**defaults.get("general", {}), **user.get("general", {})}
+    user_general = user.get("general", {})
+    if "lp_triage_updates" in user_general:
+        user_general.setdefault("triage_updates", user_general.pop("lp_triage_updates"))
+
+    merged_general = {**defaults.get("general", {}), **user_general}
 
     # Merge ai section (user overrides defaults field-by-field)
     merged_ai = {**defaults.get("ai", {}), **user.get("ai", {})}

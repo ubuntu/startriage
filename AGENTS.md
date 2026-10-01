@@ -43,6 +43,7 @@ uv run pytest
 - `startriage/cli.py` — argparse CLI with subcommands (`triage`, `todo`, `config`)
 - `startriage/triage.py` — library API: `build_filter()`, `fetch()`; no rendering
 - `startriage/report.py` — renders `triage`/`todo` reports (terminal, markdown, json) on top of `fetch()`
+- `startriage/htmlreport.py` — `--html` page from `TriageResult.report_items()` (source-independent `output.ReportItem` rows); page shell in `data/report.html`
 - `startriage/sources/` — per-source packages: `github/`, `launchpad/`, `discourse/`, `proposed/`
 - Each source has a `finder.py` (fetch data) and `triage.py` (render output)
 - The common data structure for triage results is `startriage/output.py/TriageResult`

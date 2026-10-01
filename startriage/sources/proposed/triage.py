@@ -9,13 +9,20 @@ from typing import Any
 import aiohttp
 
 from ...config import StarTriageConfig
-from ...output import OutputConfig, OutputFormat, TriageResult, hyperlink, truncate_string
+from ...output import (
+    Link,
+    OutputConfig,
+    OutputFormat,
+    ReportItem,
+    TriageResult,
+    hyperlink,
+    truncate_string,
+)
 from ...savebugs import BugPersistor
 from ...source import FetchMode, TaskFilterOptions
 from .finder import fetch_proposed_migration
 from .models import MigrationExcuse, ProposedMigrationData
 
-_LP_SOURCE_URL = "https://launchpad.net/ubuntu/+source/{pkg}"
 _LP_SOURCE_VERSION_URL = "https://launchpad.net/ubuntu/+source/{pkg}/{version}"
 _LP_BUG_URL = "https://bugs.launchpad.net/bugs/{bug}"
 _EXCUSES_URL = "https://ubuntu-archive-team.ubuntu.com/proposed-migration/update_excuses.html#{pkg}"
@@ -32,10 +39,15 @@ _COLOR_RESET = "\033[0m"
 _BOX = "\u25a0"  # ■ BLACK SQUARE
 
 
-def _version_link(pkg: str, version: str, fmt: OutputFormat) -> str:
+def _version(pkg: str, version: str) -> Link:
     if version == "-":
-        return version
-    return hyperlink(_LP_SOURCE_VERSION_URL.format(pkg=pkg, version=version), version, fmt)
+        return Link(version)
+    return Link(version, _LP_SOURCE_VERSION_URL.format(pkg=pkg, version=version))
+
+
+def _version_link(pkg: str, version: str, fmt: OutputFormat) -> str:
+    link = _version(pkg, version)
+    return hyperlink(link.url, link.text, fmt) if link.url else link.text
 
 
 def _bug_link(bug_id: int, fmt: OutputFormat) -> str:
@@ -91,7 +103,7 @@ def _print_terminal_table(excuses: list[MigrationExcuse], cfg: OutputConfig) -> 
         since_str = exc.in_proposed_since.strftime("%Y-%m-%d")
 
         pkg_cell = hyperlink(
-            _LP_SOURCE_URL.format(pkg=exc.package), truncate_string(exc.package, pkg_w), fmt, pad_right=pkg_w
+            _EXCUSES_URL.format(pkg=exc.package), truncate_string(exc.package, pkg_w), fmt, pad_right=pkg_w
         )
 
         old_new_cell = _pad(
@@ -169,6 +181,26 @@ class ProposedMigrationTriage(TriageResult):
 
     async def record(self, persistor: BugPersistor) -> None:
         pass  # proposed migration items are not LP bugs
+
+    async def report_items(self, persistor: BugPersistor | None) -> list[ReportItem]:
+        return [
+            ReportItem(
+                source="proposed",
+                key=exc.package,
+                label=exc.package,
+                url=_EXCUSES_URL.format(pkg=exc.package),
+                title=", ".join(exc.reasons),
+                refs=[Link(f"LP: #{b}", _LP_BUG_URL.format(bug=b)) for b in exc.bugs],
+                context=[
+                    _version(exc.package, exc.old_version),
+                    Link("\u2192"),
+                    _version(exc.package, exc.new_version),
+                ],
+                status="candidate" if exc.is_candidate else "blocked",
+                updated=exc.in_proposed_since,
+            )
+            for exc in self.data.excuses
+        ]
 
     async def to_dict(self) -> dict[str, Any]:
         return {"teams": self.teams, "skipped_reason": self.skipped_reason, **asdict(self.data)}

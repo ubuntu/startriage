@@ -6,18 +6,27 @@ import asyncio
 import logging
 import webbrowser
 from dataclasses import asdict, dataclass, field
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
 import aiohttp
 
-from ...config import StarTriageConfig
-from ...output import OutputConfig, OutputFormat, TriageResult, hyperlink, truncate_string
+from ...config import StarTriageConfig, UpdateFilter
+from ...output import (
+    Flag,
+    Link,
+    OutputConfig,
+    OutputFormat,
+    ReportItem,
+    TriageResult,
+    hyperlink,
+    truncate_string,
+)
 from ...savebugs import BugPersistor
 from ...source import FetchMode, TaskFilterOptions
 from .auth import get_github_token
-from .finder import _make_headers, fetch_repos
-from .models import GithubItemEntry, GitHubItemType, RepoResult
+from .finder import _make_headers, fetch_repos, fetch_team_members
+from .models import GithubItemEntry, GitHubItemType, Issue, PullRequest, RepoResult
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +39,10 @@ class GithubTriage(TriageResult):
     end: date | None
     results: list[RepoResult] = field(default_factory=list)
     mode: FetchMode = FetchMode.triage
+    recent_since: datetime | None = None
+    old_since: datetime | None = None
+    # logins whose activity counts as ours; None if unknown
+    team_members: set[str] | None = None
 
     @property
     def had_updates(self) -> bool:
@@ -176,6 +189,41 @@ class GithubTriage(TriageResult):
         item_ids = {entry.key for entry in items}
         persistor.record("github", item_ids)
 
+    async def report_items(self, persistor: BugPersistor | None) -> list[ReportItem]:
+        former = persistor.former_bugs("github") if persistor else set()
+        entries = self._collect_items()
+        current = {entry.key for entry in entries}
+        gone = [GithubItemEntry.from_key(k) for k in sorted(former - current)]
+
+        items = []
+        for entry in entries + gone:
+            updated = entry.item.updated_at or entry.item.created_at
+            checks = {
+                Flag.GONE: entry.key not in current,
+                Flag.NEW: bool(former) and entry.key not in former,
+                Flag.RECENT: bool(updated and self.recent_since and updated > self.recent_since),
+                Flag.OLD: bool(updated and self.old_since and updated < self.old_since),
+                Flag.EXTERNAL: self._is_external(entry),
+            }
+            items.append(
+                ReportItem(
+                    source="github",
+                    key=entry.key,
+                    label=f"{entry.item_type} #{entry.item.number}",
+                    url=entry.url,
+                    title=entry.item.title,
+                    context=[Link(entry.repo, entry.repo_url)],
+                    status=entry.item.state,
+                    assignees=[Link(a, f"https://github.com/{a}") for a in [entry.item.assignee] if a],
+                    updated=updated,
+                    flags={flag for flag, check in checks.items() if check},
+                )
+            )
+        return items
+
+    def _is_external(self, entry: GithubItemEntry) -> bool:
+        return entry.item.state == "open" and _last_actor_ours(entry.item, self.team_members) is False
+
     async def to_dict(self) -> dict[str, Any]:
         return {
             "mode": self.mode,
@@ -183,6 +231,34 @@ class GithubTriage(TriageResult):
             "end": self.end,
             "repos": [asdict(r) for r in self.results],
         }
+
+
+def _last_actor_ours(item: Issue | PullRequest, team_members: set[str] | None) -> bool | None:
+    """Whether the last word, the latest comment or else the opening post, is from the team.
+
+    None if unknown: no team members, or a deleted user.
+    """
+    last = item.latest_comment_author or item.author
+    if team_members is None or last is None:
+        return None
+    return last in team_members
+
+
+def _apply_update_filter(
+    results: list[RepoResult], update_filter: UpdateFilter, team_members: set[str] | None
+) -> None:
+    """Drop items whose last actor doesn't match *update_filter*; keep those of unknown actor."""
+    if update_filter == UpdateFilter.all:
+        return
+    keep_ours = update_filter == UpdateFilter.ours
+
+    def keep(item: Issue | PullRequest) -> bool:
+        ours = _last_actor_ours(item, team_members)
+        return ours is None or ours == keep_ours
+
+    for r in results:
+        r.prs = [p for p in r.prs if keep(p)]
+        r.issues = [i for i in r.issues if keep(i)]
 
 
 async def find(
@@ -233,6 +309,16 @@ async def find(
 
     async with aiohttp.ClientSession(headers=headers) as session:
         results = await fetch_repos(session, repo_specs, mode, start, end)
+        team_members = None
+        if team_config.github_team and token:
+            team_members = await fetch_team_members(session, team_config.github_team)
+            if team_members is None:
+                logger.debug(
+                    "GitHub team %r is not visible with this token, so external updates are not flagged. "
+                    "It needs the read:org scope ('startriage login github --private') "
+                    'or, for a fine-grained token, the organization permission "Members: read".',
+                    team_config.github_team,
+                )
 
     # Drop results that include at least one of the ignored labels when doing triage.
     if mode == FetchMode.triage:
@@ -241,4 +327,15 @@ async def find(
                 r.prs = [p for p in r.prs if ignore.isdisjoint(p.labels)]
                 r.issues = [i for i in r.issues if ignore.isdisjoint(i.labels)]
 
-    return GithubTriage(start=start, end=end, results=results, mode=mode)
+        update_filter = filter.update_filter or config.general.triage_updates
+        _apply_update_filter(results, update_filter, team_members)
+
+    return GithubTriage(
+        start=start,
+        end=end,
+        results=results,
+        mode=mode,
+        recent_since=filter.recent_since,
+        old_since=filter.old_since,
+        team_members=team_members,
+    )

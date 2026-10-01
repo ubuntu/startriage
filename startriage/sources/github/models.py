@@ -7,6 +7,11 @@ from datetime import datetime, timezone
 from enum import StrEnum, auto
 
 
+def _login(node: dict | None) -> str | None:
+    """Login of an ``author { login }`` node; None for deleted users."""
+    return (node or {}).get("login")
+
+
 def _parse_dt(s: str | None) -> datetime | None:
     if not s:
         return None
@@ -38,6 +43,8 @@ class PullRequest:
     latest_comment_at: datetime | None = None
     reopened_at: datetime | None = None
     closed_at: datetime | None = None
+    author: str | None = None
+    latest_comment_author: str | None = None
 
     @classmethod
     def from_graphql_node(cls, node: dict, repo_url: str) -> PullRequest:
@@ -59,6 +66,8 @@ class PullRequest:
             state=node["state"].lower(),
             labels=[lbl["name"] for lbl in node.get("labels", {}).get("nodes") or []],
             assignee=assignee_nodes[0]["login"] if assignee_nodes else None,
+            author=_login(node.get("author")),
+            latest_comment_author=_login(comment_nodes[-1].get("author")) if comment_nodes else None,
         )
 
 
@@ -77,6 +86,8 @@ class Issue:
     latest_comment_at: datetime | None = None
     reopened_at: datetime | None = None
     closed_at: datetime | None = None
+    author: str | None = None
+    latest_comment_author: str | None = None
 
     @classmethod
     def from_graphql_node(cls, node: dict, repo_url: str) -> Issue:
@@ -98,6 +109,8 @@ class Issue:
             state=node["state"].lower(),
             labels=[lbl["name"] for lbl in node.get("labels", {}).get("nodes") or []],
             assignee=assignee_nodes[0]["login"] if assignee_nodes else None,
+            author=_login(node.get("author")),
+            latest_comment_author=_login(comment_nodes[-1].get("author")) if comment_nodes else None,
         )
 
 
