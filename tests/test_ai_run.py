@@ -6,31 +6,26 @@ import pytest
 
 from startriage.ai import (
     FakeProvider,
+    FakeTurn,
     parse_bug_number,
     payloads_from_tasks,
     run_agent_on_payloads,
 )
-from startriage.ai.provider import AIPermission
 from startriage.cli import _build_parser
-from startriage.config import StarTriageConfig
+from startriage.config import AIConfig, StarTriageConfig
 
-_CANNED = """Here is my analysis.
-
-```json
-{
-  "bug": "123",
-  "package": "pkg",
-  "short_title": "boom on start",
-  "status": "Triaged",
-  "tags": ["server-todo"],
-  "analysis": "It broke.",
-  "thought_process": "Looked at logs.",
-  "proposed_fix": {"kind": "none", "value": ""},
-  "references": [],
-  "suggested_improvements": ""
+_VALIDATION = {
+    "verdict": "support",
+    "reason": "a configuration question",
+    "short_title": "boom on start",
+    "comment": "Please ask on Discourse.",
 }
-```
-"""
+_CANNED = [FakeTurn(calls=[("submit_validation", _VALIDATION)])]
+
+
+@pytest.fixture(autouse=True)
+def _cache_in_tmp(monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
 
 
 # --- parse_bug_number ------------------------------------------------------
@@ -101,36 +96,38 @@ def test_payloads_from_tasks_skips_failures():
 async def test_run_agent_on_payloads_returns_markdown():
     provider = FakeProvider([_CANNED])
     config = StarTriageConfig()
-    payloads = [{"number": "123", "title": "boom"}]
+    payloads = [{"number": "123", "package": "pkg", "title": "boom"}]
 
     report = await run_agent_on_payloads(config, payloads, provider=provider)
 
     assert report is not None
     assert "## LP #123 — pkg — boom on start" in report
-    assert "**Suggested status:** Triaged" in report
-    # The agent was asked exactly once, with the payload as the user message.
-    assert len(provider.calls) == 1
-    assert '"number": "123"' in provider.calls[0][1]
-
-
-@pytest.mark.asyncio
-async def test_run_agent_on_payloads_empty_returns_none():
-    provider = FakeProvider([])
-    report = await run_agent_on_payloads(StarTriageConfig(), [], provider=provider)
-    assert report is None
-    assert provider.calls == []
-
-
-@pytest.mark.asyncio
-async def test_run_agent_on_payloads_records_bad_agent_output():
-    provider = FakeProvider(["no json here"])
-    report = await run_agent_on_payloads(
-        StarTriageConfig(),
-        [{"number": "999"}],
-        provider=provider,
+    assert "**Route:** new" in report
+    assert "**Suggested status:** Invalid" in report
+    assert "> Please ask on Discourse." in report
+    # One session: validate-report, with the payload in the task and its own tools.
+    assert len(provider.specs) == 1
+    spec = provider.specs[0]
+    assert '"number": "123"' in spec.task
+    assert [t.name for t in spec.tools] == ["lp_get_bug", "lp_get_attachment", "submit_validation"]
+    assert (
+        "_Agent tools: lp_get_bug, lp_get_attachment, lp_search_bugs, pkg_versions, pkg_changelog," in report
     )
+    assert "## Cost" in report
+    # The per-run scratch dir is removed afterwards.
+    assert spec.working_directory is not None
+    assert not spec.working_directory.exists()
+
+
+@pytest.mark.asyncio
+async def test_run_agent_on_payloads_uses_chosen_tools():
+    provider = FakeProvider([_CANNED])
+    config = StarTriageConfig(ai=AIConfig(tools={"lp_get_attachment": False}))
+    report = await run_agent_on_payloads(config, [{"number": "1"}], provider=provider)
+    names = [t.name for t in provider.specs[0].tools]
+    assert names == ["lp_get_bug", "submit_validation"]
     assert report is not None
-    assert "## LP #999 — triage failed" in report
+    assert "lp_get_attachment" not in report
 
 
 # --- CLI parser wiring -----------------------------------------------------
@@ -140,32 +137,15 @@ def test_parser_analyze_accepts_multiple_bugs():
     args = _build_parser().parse_args(["analyze", "123", "#456", "https://x/+bug/789"])
     assert args.bug == ["123", "#456", "https://x/+bug/789"]
     assert args.func.__name__ == "_run_analyze"
-    assert args.ai is None
+    assert args.ai is False
 
 
-def test_parser_analyze_ai_flag():
-    # No --ai -> off; --ai requires an explicit level; a bug number is not a level.
-    assert _build_parser().parse_args(["analyze", "123"]).ai is None
-    assert _build_parser().parse_args(["analyze", "--ai", "full", "123"]).ai is AIPermission.full
-    assert _build_parser().parse_args(["analyze", "--ai", "ask", "123"]).ai is AIPermission.ask
-    args = _build_parser().parse_args(["analyze", "--ai", "restricted", "123"])
-    assert args.ai is AIPermission.restricted
+def test_parser_ai_is_a_plain_flag():
+    assert _build_parser().parse_args(["analyze", "123"]).ai is False
+    args = _build_parser().parse_args(["analyze", "--ai", "123"])
+    assert args.ai is True
     assert args.bug == ["123"]
-
-
-def test_parser_triage_ai_flag_defaults_none():
-    assert _build_parser().parse_args(["triage"]).ai is None
-    assert _build_parser().parse_args(["triage", "--ai", "restricted"]).ai is AIPermission.restricted
-    assert _build_parser().parse_args(["triage", "--ai", "full"]).ai is AIPermission.full
-
-
-def test_parser_ai_flag_requires_a_level():
-    with pytest.raises(SystemExit):
-        _build_parser().parse_args(["triage", "--ai"])
-
-
-def test_parser_ai_flag_rejects_unknown_level():
-    with pytest.raises(SystemExit):
-        _build_parser().parse_args(["triage", "--ai", "bogus"])
-    with pytest.raises(SystemExit):
-        _build_parser().parse_args(["analyze", "--ai", "123"])
+    assert _build_parser().parse_args(["triage"]).ai is False
+    assert _build_parser().parse_args(["triage", "--ai"]).ai is True
+    assert _build_parser().parse_args(["triage"]).ai_keep_workdir is False
+    assert _build_parser().parse_args(["analyze", "--ai", "--ai-keep-workdir", "1"]).ai_keep_workdir is True

@@ -89,6 +89,10 @@ class AIConfig(BaseModel):
     # OpenRouter (BYOK) auth.
     openrouter_api_key: str | None = None
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    # [ai.tools]: agent tools the user enabled/disabled; None = not chosen yet.
+    tools: dict[str, bool] | None = None
+    # Ask the model for feedback on the skills (logged and shown in the report).
+    suggest_improvements: bool = False
 
     def resolve_token(self) -> str | None:
         """Return the effective credential for the active provider.

@@ -7,7 +7,6 @@ import asyncio
 import sys
 from pathlib import Path
 
-from .ai.provider import AIPermission
 from .config import (
     DEFAULT_USER_CONFIG,
     AIProvider,
@@ -134,16 +133,16 @@ def _build_parser() -> argparse.ArgumentParser:
     ai_p = argparse.ArgumentParser(add_help=False)
     ai_p.add_argument(
         "--ai",
-        type=AIPermission,
-        choices=list(AIPermission),
-        default=None,
-        metavar="LEVEL",
+        action="store_true",
         help=(
-            "Also run AI triage, granting the agent this permission level (required): "
-            "restricted (no tool execution), "
-            "full (auto-approve every shell/file/web tool), or "
-            "ask (prompt on the terminal before each tool call)"
+            "Also run AI triage. The agent can only use the tools enabled with "
+            "'startriage config ai-tools' (read-only by default)"
         ),
+    )
+    ai_p.add_argument(
+        "--ai-keep-workdir",
+        action="store_true",
+        help="Keep the AI agent's scratch directory (fetched sources, session files) and print its path",
     )
 
     list_p = argparse.ArgumentParser(
@@ -307,6 +306,15 @@ GREEN = done
     config_show_p = config_sp.add_parser("show", help="Display resolved configuration")
     config_show_p.set_defaults(func=_show_config)
 
+    config_ai_tools_p = config_sp.add_parser(
+        "ai-tools",
+        help="Choose the tools the AI agent may use (interactive checklist on a terminal)",
+    )
+    config_ai_tools_p.add_argument("--list", action="store_true", help="List the tools and their state")
+    config_ai_tools_p.add_argument("--enable", metavar="TOOL[,TOOL]", help="Enable these tools")
+    config_ai_tools_p.add_argument("--disable", metavar="TOOL[,TOOL]", help="Disable these tools")
+    config_ai_tools_p.set_defaults(func=_config_ai_tools)
+
     # --- login ---
     login_p = sp.add_parser("login", help="Authorize startriage to access a service")
     login_p.add_argument(
@@ -393,13 +401,15 @@ async def _run() -> None:
 async def _run_triage(args: argparse.Namespace, config: StarTriageConfig) -> None:
     provider = None
     output_cfg = _outputcfg_from_args(args)
-    if args.ai is not None:
+    if args.ai:
         # Build the provider up-front so a misconfigured [ai] section fails
         # before the (slow) normal triage run rather than after it. A missing
         # credential raises AIConfigError, which propagates to the top.
         from .ai import build_provider
+        from .ai.tool_choice import resolve_tools
 
-        provider = build_provider(config.ai, args.ai)
+        provider = build_provider(config.ai)
+        resolve_tools(config, args.config)
 
     filter = _filter_from_args(config, args)
     team = config.get_team(filter.team)
@@ -422,10 +432,12 @@ async def _run_triage(args: argparse.Namespace, config: StarTriageConfig) -> Non
     if print_fetch_errors(results):
         sys.exit(1)
 
-    if args.ai is not None:
+    if args.ai:
         from .ai import emit_ai_report, run_ai_over_triage_results
 
-        report = await run_ai_over_triage_results(config, results, provider=provider)
+        report = await run_ai_over_triage_results(
+            config, results, provider=provider, keep_workdir=args.ai_keep_workdir
+        )
         if report is not None:
             emit_ai_report(report, output_cfg.markdown_path)
 
@@ -472,7 +484,7 @@ async def _run_login(args: argparse.Namespace, config: StarTriageConfig) -> None
 
 
 async def _run_analyze(args: argparse.Namespace, config: StarTriageConfig) -> None:
-    if args.ai is None:
+    if not args.ai:
         from .ai import describe_bug_specs
 
         lp = await asyncio.to_thread(connect_launchpad, config.general.lp_credentials_file)
@@ -484,10 +496,14 @@ async def _run_analyze(args: argparse.Namespace, config: StarTriageConfig) -> No
         return
 
     from .ai import build_provider, run_ai_over_bug_specs
+    from .ai.tool_choice import resolve_tools
 
-    provider = build_provider(config.ai, args.ai)
+    provider = build_provider(config.ai)
+    resolve_tools(config, args.config)
     lp = await asyncio.to_thread(connect_launchpad, config.general.lp_credentials_file)
-    report = await run_ai_over_bug_specs(config, lp, args.bug, provider=provider)
+    report = await run_ai_over_bug_specs(
+        config, lp, args.bug, provider=provider, keep_workdir=args.ai_keep_workdir
+    )
     if report is None:
         print("No valid bugs to triage.", file=sys.stderr)
         return
@@ -539,3 +555,31 @@ async def _set_config_settings(args: argparse.Namespace, _config: StarTriageConf
 
 async def _show_config(args: argparse.Namespace, config: StarTriageConfig) -> None:
     print(config.show())
+
+
+async def _config_ai_tools(args: argparse.Namespace, config: StarTriageConfig) -> None:
+    from .ai.tool_choice import choose_tools, format_tools, save_tools
+    from .ai.tools import REGISTRY, enabled_tool_names
+
+    enabled = set(enabled_tool_names(config.ai))
+    if args.enable or args.disable:
+        enable = {n.strip() for n in (args.enable or "").split(",") if n.strip()}
+        disable = {n.strip() for n in (args.disable or "").split(",") if n.strip()}
+        unknown = sorted((enable | disable) - REGISTRY.keys())
+        if unknown:
+            raise ConfigError(
+                f"unknown tool(s): {', '.join(unknown)} (see 'startriage config ai-tools --list')"
+            )
+        enabled = (enabled | enable) - disable
+    elif args.list or not sys.stdin.isatty():
+        print(format_tools(enabled))
+        return
+    else:
+        chosen = choose_tools(enabled)
+        if chosen is None:
+            print("Cancelled, nothing saved.")
+            return
+        enabled = chosen
+    path = save_tools(enabled, args.config)
+    print(format_tools(enabled))
+    print(f"Saved to {path}")

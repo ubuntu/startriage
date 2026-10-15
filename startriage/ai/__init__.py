@@ -2,20 +2,17 @@
 
 from __future__ import annotations
 
-from .agent import BugOutcome, load_system_prompt, triage_bug, triage_bugs
-from .contract import (
-    AgentResult,
-    AgentResultError,
-    ProposedFix,
-    extract_json_block,
-    parse_agent_result,
-)
+from .agent import BugOutcome, run_phase
+from .contract import AgentResult, ProposedFix
+from .pipeline import Pipeline, triage_bugs
 from .provider import (
     CopilotProvider,
     FakeProvider,
+    FakeTurn,
     Provider,
+    SessionResult,
+    SessionSpec,
     build_client_kwargs,
-    build_permission_handler,
     build_provider,
     build_session_kwargs,
 )
@@ -37,23 +34,22 @@ from .run import (
 
 __all__ = [
     "AgentResult",
-    "AgentResultError",
     "BugOutcome",
     "CopilotProvider",
     "FakeProvider",
+    "FakeTurn",
+    "Pipeline",
     "ProposedFix",
     "Provider",
+    "SessionResult",
+    "SessionSpec",
     "append_report",
     "build_client_kwargs",
-    "build_permission_handler",
     "build_provider",
     "build_session_kwargs",
     "describe_bug_specs",
     "emit_ai_report",
-    "extract_json_block",
     "gather_user_bug_payloads",
-    "load_system_prompt",
-    "parse_agent_result",
     "parse_bug_number",
     "payloads_from_tasks",
     "render_bug_metadata",
@@ -61,6 +57,6 @@ __all__ = [
     "run_agent_on_payloads",
     "run_ai_over_bug_specs",
     "run_ai_over_triage_results",
-    "triage_bug",
+    "run_phase",
     "triage_bugs",
 ]

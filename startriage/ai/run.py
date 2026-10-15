@@ -18,15 +18,26 @@ so non-AI commands and offline tests never pull in launchpadlib.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import re
+import tempfile
+from collections.abc import Iterator
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from ..config import StarTriageConfig
+import aiohttp
+import platformdirs
+
+from ..config import StarTriageConfig, resolve_team_name
 from ..spinner import Spinner
-from .agent import load_system_prompt, triage_bugs
-from .provider import AIPermission, Provider, build_provider
+from .checks import URLChecker
+from .feedback import default_feedback_log
+from .pipeline import Pipeline, triage_bugs
+from .precheck import Window
+from .provider import Provider, build_provider
 from .render import render_bug_metadata, render_report
+from .tools import ReadOnlyHTTP, ToolContext, build_tools, debian, enabled_tool_names
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -103,6 +114,18 @@ def payloads_from_tasks(tasks: list[Task]) -> list[dict[str, Any]]:
     return payloads
 
 
+def team_members(lp: Launchpad, team: str) -> frozenset[str]:
+    """Launchpad names of the team and its members (blocking LP access)."""
+    try:
+        people = lp.people[team]
+        return frozenset({team, *(person.name for person in people.participants)})
+    except Exception:
+        logger.warning(
+            "Could not read the members of %s; no activity counts as the team's", team, exc_info=True
+        )
+        return frozenset()
+
+
 def _make_spinner(total: int) -> Spinner:
     """Return a status spinner for the triage run.
 
@@ -113,39 +136,100 @@ def _make_spinner(total: int) -> Spinner:
     return Spinner(set(), status=f"Preparing to triage {total} {noun}…")
 
 
+def _github_credentials(config: StarTriageConfig) -> dict[str, dict[str, str]] | None:
+    """The GitHub API token header, sent to api.github.com only (higher search limits)."""
+    from ..sources.github.auth import get_github_token
+
+    try:
+        token = get_github_token(config.general.github_token)
+    except Exception as exc:
+        logger.info("No GitHub token for the AI tools: %s", exc)
+        return None
+    return {"api.github.com": {"Authorization": f"Bearer {token}"}} if token else None
+
+
+@contextlib.contextmanager
+def scratch_dir(keep: bool = False) -> Iterator[Path]:
+    """A per-run working directory for the agent session, removed afterwards unless ``keep``."""
+    root = platformdirs.user_cache_path("startriage") / "ai"
+    root.mkdir(parents=True, exist_ok=True)
+    if keep:
+        path = Path(tempfile.mkdtemp(dir=root))
+        try:
+            yield path
+        finally:
+            logger.warning("Kept the AI scratch directory: %s", path)
+        return
+    with tempfile.TemporaryDirectory(dir=root) as name:
+        yield Path(name)
+
+
 async def run_agent_on_payloads(
     config: StarTriageConfig,
     payloads: list[dict[str, Any]],
     *,
+    lp: Launchpad | None = None,
     provider: Provider | None = None,
+    team: frozenset[str] = frozenset(),
+    window: Window | None = None,
+    keep_workdir: bool = False,
 ) -> str | None:
     """Run the agent over ``payloads`` and return the rendered markdown report.
 
     Returns the markdown string, or ``None`` when there is nothing to triage.
     Emitting the report (printing it or folding it into a triage markdown file)
     is left to the caller. When ``provider`` is omitted it is built from
-    ``config`` in the safe ``restricted`` permission level (validating
-    credentials, which may raise :class:`~startriage.config.AIConfigError`); the
-    CLI always passes an explicit provider carrying the user's ``--ai`` level.
+    ``config`` (validating credentials, which may raise
+    :class:`~startriage.config.AIConfigError`). The agent gets the tools enabled
+    in ``[ai.tools]``; Launchpad tools use ``lp``. ``team`` (member names) and
+    ``window`` (the triage date range) drive the precheck routes. The scratch
+    directory (fetched sources, session files) is kept with ``keep_workdir``.
     """
     if not payloads:
         logger.info("No bugs to triage with the AI agent.")
         return None
 
     if provider is None:
-        provider = build_provider(config.ai, AIPermission.restricted)
+        provider = build_provider(config.ai)
 
-    system_prompt = load_system_prompt()
+    tool_names = enabled_tool_names(config.ai)
+    logger.info("AI agent tools: %s", ", ".join(tool_names) or "none")
     spinner = _make_spinner(len(payloads))
+    current = {"label": "bug", "count": ""}
 
     def on_progress(index: int, total: int, bug: str) -> None:
-        label = f"LP #{bug}" if bug else "bug"
-        spinner.set_status(f"Triaging {label} ({index}/{total})…")
+        current["label"] = f"LP #{bug}" if bug else "bug"
+        current["count"] = f"{index}/{total}"
+        spinner.set_status(f"Triaging {current['label']} ({current['count']})…")
 
-    async with spinner:
-        outcomes = await triage_bugs(provider, payloads, system_prompt, on_progress=on_progress)
+    def on_phase(phase: str) -> None:
+        spinner.set_status(f"Triaging {current['label']} · {phase} ({current['count']})…")
 
-    return render_report(outcomes)
+    async with aiohttp.ClientSession() as http_session, spinner:
+        http = ReadOnlyHTTP(
+            http_session,
+            allowed_posts=debian.ALLOWED_POSTS,
+            credentials=_github_credentials(config) if "github_search" in tool_names else None,
+        )
+        with scratch_dir(keep_workdir) as workdir:
+            tools = build_tools(ToolContext(lp=lp, http=http, workdir=workdir), tool_names)
+            pipeline = Pipeline(
+                provider=provider,
+                tools={tool.name: tool for tool in tools},
+                lp=lp,
+                http=http,
+                team=team,
+                window=window,
+                urls=URLChecker(http if "verify_url" in tool_names else None),
+                feedback=config.ai.suggest_improvements,
+                feedback_log=default_feedback_log() if config.ai.suggest_improvements else None,
+                model=config.ai.model or "",
+                working_directory=workdir,
+                on_phase=on_phase,
+            )
+            outcomes = await triage_bugs(pipeline, payloads, on_progress=on_progress)
+
+    return render_report(outcomes, tools=tool_names)
 
 
 async def run_ai_over_bug_specs(
@@ -154,6 +238,7 @@ async def run_ai_over_bug_specs(
     bug_specs: list[str],
     *,
     provider: Provider | None = None,
+    keep_workdir: bool = False,
 ) -> str | None:
     """Resolve user-supplied bug specs and run the agent, returning the report.
 
@@ -164,7 +249,16 @@ async def run_ai_over_bug_specs(
     payloads = await asyncio.to_thread(gather_user_bug_payloads, lp, bug_specs)
     if not payloads:
         return None
-    return await run_agent_on_payloads(config, payloads, provider=provider)
+    team: frozenset[str] = frozenset()
+    try:
+        lp_team = config.get_team(resolve_team_name(None, config)).lp_team
+    except KeyError:
+        logger.info("No default team: no activity counts as the team's")
+    else:
+        team = await asyncio.to_thread(team_members, lp, lp_team)
+    return await run_agent_on_payloads(
+        config, payloads, lp=lp, provider=provider, team=team, keep_workdir=keep_workdir
+    )
 
 
 async def describe_bug_specs(lp: Launchpad, bug_specs: list[str]) -> str | None:
@@ -185,6 +279,7 @@ async def run_ai_over_triage_results(
     results: Mapping[str, TriageResult],
     *,
     provider: Provider | None = None,
+    keep_workdir: bool = False,
 ) -> str | None:
     """Run the agent over the Launchpad tasks gathered by a normal triage run.
 
@@ -194,7 +289,13 @@ async def run_ai_over_triage_results(
     from ..sources.launchpad.triage import LaunchpadTriage
 
     result = results.get("launchpad")
-    tasks: list[Task] = list(result.tasks.tasks) if isinstance(result, LaunchpadTriage) else []
+    if not isinstance(result, LaunchpadTriage):
+        return await run_agent_on_payloads(config, [], provider=provider)
 
-    payloads = await asyncio.to_thread(payloads_from_tasks, tasks)
-    return await run_agent_on_payloads(config, payloads, provider=provider)
+    payloads = await asyncio.to_thread(payloads_from_tasks, list(result.tasks.tasks))
+    lp = result.tasks.lp
+    team = await asyncio.to_thread(team_members, lp, result.team_config.lp_team) if payloads else frozenset()
+    window = (result.filter.start, result.filter.end) if result.filter.start and result.filter.end else None
+    return await run_agent_on_payloads(
+        config, payloads, lp=lp, provider=provider, team=team, window=window, keep_workdir=keep_workdir
+    )

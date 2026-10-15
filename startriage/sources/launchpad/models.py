@@ -474,26 +474,45 @@ class Task:
             )
 
         attachments = [
-            {"title": att.title, "type": att.type, "is_patch": att.type == "Patch"} for att in bug.attachments
+            {"index": index, "title": att.title, "type": att.type, "is_patch": att.type == "Patch"}
+            for index, att in enumerate(bug.attachments)
         ]
 
         duplicate_of = bug.duplicate_of
         duplicate_of_number = str(duplicate_of.id) if duplicate_of else None
+
+        activity = [
+            {
+                "date": entry.datechanged.isoformat() if entry.datechanged else None,
+                "person": _name_from_link(entry.person_link),
+                "what": entry.whatchanged,
+            }
+            for entry in bug.activity
+        ]
 
         return {
             "number": self.number,
             "url": self.url,
             "title": self.title,
             "short_title": self.short_title,
+            "package": self.src,
             "description": bug.description,
+            "reporter": _name_from_link(bug.owner_link),
+            "date_created": bug.date_created.isoformat() if bug.date_created else None,
             "status": self.status,
             "importance": self.importance,
             "tags": list(self.tags),
+            "assignees": list(self.all_assignees),
             "heat": bug.heat,
             "duplicate_of": duplicate_of_number,
             "affected": [_affected_from_task(t) for t in self._all_bug_tasks],
             "attachments": attachments,
             "comments": comments,
+            # Host-only: used by the precheck, never sent to the model.
+            "private": bool(bug.private),
+            "information_type": bug.information_type,
+            "expiring": self.expiring,
+            "activity": activity,
         }
 
 

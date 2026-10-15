@@ -16,6 +16,18 @@ triage_updates = "theirs"
 #github_token = "github_pat_..."                  # or COPILOT_GITHUB_TOKEN / GH_TOKEN env
 #openrouter_api_key = "..."                       # or OPENROUTER_API_KEY env
 #openrouter_base_url = "https://openrouter.ai/api/v1"
+# Ask the model what to improve in the triage skills; the feedback goes in the
+# report and in ~/.local/state/startriage/skill-feedback.jsonl.
+#suggest_improvements = false
+
+# Tools the agent may use; set with 'startriage config ai-tools'.
+# A tool not listed gets its default: read tools on, fetch_url and the tools
+# that run programs (fetch_source, patch_applies) off.
+# grep_source and read_source_file need fetch_source.
+# A phase whose tools are all off is skipped.
+#[ai.tools]
+#fetch_url = false
+#github_search = true
 
 [team.ubuntu-server]
 lp_team = "ubuntu-server"

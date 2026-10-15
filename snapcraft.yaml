@@ -55,7 +55,9 @@ parts:
     # github-copilot-sdk bundles the Copilot CLI runtime binary it spawns, so no
     # separate Node part is needed; pip ships the runtime inside the snap.
     python-packages:
-      - github-copilot-sdk
+      - github-copilot-sdk>=1.0.16
     stage-packages:
       # pull-lp-source / dpkg-source / debdiff for the agent's source analysis.
       - ubuntu-dev-tools
+      # patch --dry-run for patch_applies.
+      - patch

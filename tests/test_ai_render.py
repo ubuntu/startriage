@@ -12,8 +12,9 @@ from startriage.ai import (
     render_bug_metadata,
     render_report,
 )
-from startriage.ai.contract import ProposedFixKind, TriageStatus
-from startriage.ai.render import AI_APPEND_NOTICE, _render_proposed_fix
+from startriage.ai.contract import Importance, ProposedFixKind, SRUCandidate, TriageStatus
+from startriage.ai.phases import PhaseOutcome, PhaseState
+from startriage.ai.render import AI_APPEND_NOTICE, SRU_NOTICE, _render_proposed_fix
 
 _DAY = date(2026, 6, 15)
 
@@ -24,19 +25,21 @@ def _result(**overrides) -> AgentResult:
         "package": "pkg",
         "short_title": "boom on start",
         "status": TriageStatus.triaged,
-        "tags": ["server-todo", "bitesize"],
+        "importance": Importance.high,
+        "series": {"noble": TriageStatus.triaged},
+        "tags": ["server-todo"],
         "analysis": "It crashes immediately.",
-        "thought_process": "Read the logs, searched LP.",
+        "suggested_comment": "Thanks.\n\nFixed upstream.",
         "proposed_fix": ProposedFix(kind=ProposedFixKind.reference, value="https://example.test/commit"),
         "references": ["https://bugs.launchpad.net/ubuntu/+bug/123"],
-        "suggested_improvements": "Add a version cache.",
+        "sru_candidates": [SRUCandidate(series="noble", reason="fixed in 2.0 upstream")],
     }
     base.update(overrides)
-    return AgentResult(**base)
+    return AgentResult.model_validate(base)
 
 
 def _outcome(result: AgentResult) -> BugOutcome:
-    return BugOutcome(bug=result.bug, result=result, error=None, raw="{}")
+    return BugOutcome(bug=result.bug, result=result)
 
 
 # --- bug metadata rendering ------------------------------------------------
@@ -69,58 +72,65 @@ def test_render_bug_metadata_renders_key_fields():
     assert "**alice** — 2026-06-15" in rendered
 
 
-def test_render_bug_metadata_handles_sparse_payload():
-    rendered = render_bug_metadata([{"number": "1"}])
-    assert "## LP #1 — (no title)" in rendered
-    assert "**Tags:** _none_" in rendered
-    assert "_No description._" in rendered
-
-
 # --- proposed fix rendering ------------------------------------------------
 
 
-def test_render_proposed_fix_none():
-    fix = ProposedFix(kind=ProposedFixKind.none, value="")
-    assert _render_proposed_fix(fix) == "_No fix proposed._"
-
-
-def test_render_proposed_fix_reference():
-    fix = ProposedFix(kind=ProposedFixKind.reference, value="https://x.test/c ")
-    assert _render_proposed_fix(fix) == "https://x.test/c"
-
-
-def test_render_proposed_fix_diff_is_fenced_not_applied():
+def test_render_proposed_fix_diff_is_fenced_and_an_empty_one_is_no_fix():
     diff = "--- a/f\n+++ b/f\n@@ -1 +1 @@\n-old\n+new"
     rendered = _render_proposed_fix(ProposedFix(kind=ProposedFixKind.diff, value=diff))
     assert rendered == f"```diff\n{diff}\n```"
-
-
-def test_render_proposed_fix_empty_diff_falls_back():
-    # A diff kind with no value should not emit an empty code block.
     fix = ProposedFix(kind=ProposedFixKind.diff, value="   ")
     assert _render_proposed_fix(fix) == "_No fix proposed._"
+
+
+def test_render_report_lists_host_patch_checks():
+    result = _result(fix_applies={"noble": "clean", "devel": "already applied"})
+    rendered = render_report([_outcome(result)], _DAY)
+    assert "Checked by the host (patches applied):\n\n- noble: clean\n- devel: already applied" in rendered
+    assert "Checked by the host" not in render_report([_outcome(_result())], _DAY)
 
 
 # --- full report -----------------------------------------------------------
 
 
+def _phase(phase: str, state=PhaseState.done, summary: str = "", **kwargs) -> PhaseOutcome:
+    return PhaseOutcome(phase=phase, state=state, summary=summary, **kwargs)
+
+
 def test_render_report_golden():
-    outcomes = [_outcome(_result())]
+    outcome = _outcome(_result())
+    outcome.route = "new"
+    outcome.phases = [
+        _phase("precheck", summary="route=new: no team activity"),
+        _phase(
+            "validate-report",
+            summary="verdict=bug: a crash",
+            tool_calls=["lp_get_bug", "lp_get_bug", "submit_validation"],
+            input_tokens=1200,
+            output_tokens=80,
+            sessions=1,
+        ),
+    ]
     expected = (
         "# Automated triage — 2026-06-15\n"
         "\n"
         "## LP #123 — pkg — boom on start\n"
         "\n"
+        "**Route:** new\n"
         "**Suggested status:** Triaged\n"
-        "**Suggested tags:** server-todo, bitesize\n"
+        "**Suggested importance:** High\n"
+        "**Per series:** noble: Triaged\n"
+        "**Suggested tags:** server-todo\n"
         "\n"
         "### Analysis\n"
         "\n"
         "It crashes immediately.\n"
         "\n"
-        "### Thought Process\n"
+        "### Suggested Comment\n"
         "\n"
-        "Read the logs, searched LP.\n"
+        "> Thanks.\n"
+        ">\n"
+        "> Fixed upstream.\n"
         "\n"
         "### Proposed Fix\n"
         "\n"
@@ -130,47 +140,72 @@ def test_render_report_golden():
         "\n"
         "- https://bugs.launchpad.net/ubuntu/+bug/123\n"
         "\n"
-        "## Suggested Improvements\n"
+        "### SRU Candidates\n"
         "\n"
-        "Add a version cache.\n"
+        "- noble: fixed in 2.0 upstream\n"
+        "\n"
+        f"_{SRU_NOTICE}_\n"
+        "\n"
+        "### Thought Process\n"
+        "\n"
+        "- **precheck** (done): route=new: no team activity\n"
+        "- **validate-report** (done): verdict=bug: a crash"
+        " _(tools: lp_get_bug x2, submit_validation; 1,200 in / 80 out tokens)_\n"
+        "\n"
+        "## Cost\n"
+        "\n"
+        "| Phase | Sessions | Input tokens | Output tokens |\n"
+        "|---|---:|---:|---:|\n"
+        "| validate-report | 1 | 1,200 | 80 |\n"
+        "| **total** | 1 | 1,200 | 80 |\n"
     )
-    assert render_report(outcomes, day=_DAY) == expected
+    assert render_report([outcome], day=_DAY) == expected
 
 
-def test_render_report_no_tags_and_no_references():
-    result = _result(tags=[], references=[], suggested_improvements="")
+def test_render_report_leaves_out_empty_sections():
+    result = _result(
+        tags=[],
+        references=[],
+        sru_candidates=[],
+        suggested_comment="",
+        status=TriageStatus.no_change,
+        importance=Importance.undecided,
+    )
     report = render_report([_outcome(result)], day=_DAY)
     assert "**Suggested tags:** _none_" in report
-    assert "### References" not in report
-    assert "## Suggested Improvements" not in report
-
-
-def test_render_report_no_change_status():
-    result = _result(status=TriageStatus.no_change)
-    report = render_report([_outcome(result)], day=_DAY)
     assert "**Suggested status:** no-change" in report
+    assert "importance" not in report
+    assert "### References" not in report
+    assert "### SRU Candidates" not in report
+    assert "### Suggested Comment" not in report
+    assert "## Cost" not in report
 
 
-def test_render_report_records_failures():
+def test_render_report_records_failures_and_bugs_not_sent():
     ok = _outcome(_result(bug="123"))
-    failed = BugOutcome(bug="456", result=None, error="agent output invalid", raw="junk")
-    report = render_report([ok, failed], day=_DAY)
+    failed = BugOutcome(bug="456", error="validate-report failed: provider error: boom")
+    failed.phases = [_phase("validate-report", PhaseState.failed, "provider error: boom")]
+    denied = BugOutcome(bug="789", route="denied", note="Private bug: not sent to the AI.")
+    denied.phases = [_phase("precheck", summary="route=denied: private (Private Security)")]
+    report = render_report([ok, failed, denied], day=_DAY)
 
     assert "## LP #123 — pkg — boom on start" in report
     assert "## LP #456 — triage failed" in report
-    assert "**Error:** agent output invalid" in report
+    assert "**Error:** validate-report failed: provider error: boom" in report
+    assert "- **validate-report** (failed): provider error: boom" in report
+    assert "## LP #789 — not triaged by AI\n\nPrivate bug: not sent to the AI." in report
+    assert "_Precheck: route=denied: private (Private Security)_" in report
 
 
-def test_render_report_deduplicates_improvements():
-    a = _outcome(_result(bug="1", suggested_improvements="Same note."))
-    b = _outcome(_result(bug="2", suggested_improvements="Same note."))
-    c = _outcome(_result(bug="3", suggested_improvements="Different note."))
-    report = render_report([a, b, c], day=_DAY)
-
-    # "Same note." appears once in the improvements section.
-    improvements = report.split("## Suggested Improvements", 1)[1]
-    assert improvements.count("Same note.") == 1
-    assert "Different note." in improvements
+def test_render_report_groups_skill_feedback():
+    a = _outcome(_result(bug="1"))
+    a.phases = [_phase("validate-report", feedback="Explain\nsync requests.")]
+    b = _outcome(_result(bug="2"))
+    b.phases = [_phase("validate-report", feedback="Too long."), _phase("write-report", feedback="Fine.")]
+    report = render_report([a, b], day=_DAY)
+    feedback = report.split("## Skill Feedback", 1)[1]
+    assert "### validate-report\n\n- LP #1: Explain sync requests.\n- LP #2: Too long." in feedback
+    assert "### write-report\n\n- LP #2: Fine." in feedback
 
 
 # --- append_report ---------------------------------------------------------

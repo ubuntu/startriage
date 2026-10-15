@@ -79,37 +79,88 @@ never applies patches — it only prints its analysis.
 `--ai` needs a provider, a model and credentials, see
 [Configuring the AI backend](#configuring-the-ai-backend).
 
-`--ai` requires a permission level that controls what the agent may run:
+The agent has no shell and none of the model's built-in tools. It can only call
+the tools startriage provides, all read-only except `fetch_source`, which runs
+`pull-lp-source` (off by default):
 
-- `restricted` — no tool execution; the agent reasons only over the bug metadata
-  it was handed.
-- `full` — auto-approve every shell/file/web tool the agent requests. This lets
-  it pull source, run `debdiff`, fetch upstream, etc., but it executes arbitrary
-  commands on your host: only use it in a container or throwaway environment.
-- `ask` — the agent runs tools, but you are prompted on the terminal to approve
-  or deny each call.
+| Tool | Default | What it does |
+| --- | --- | --- |
+| `lp_get_bug` | on | Read a public Launchpad bug (metadata, description, comments) |
+| `lp_get_attachment` | on | Read or grep a text attachment of a public bug |
+| `lp_search_bugs` | on | Search public bugs of a source package (duplicates, related bugs) |
+| `pkg_versions` | on | Versions of a source package per pocket in each supported series |
+| `pkg_changelog` | on | Read or grep the `debian/changelog` of an Ubuntu or Debian package version |
+| `source_file` | on | Read one file of a package's source from git-ubuntu (no download) |
+| `source_list` | on | List a directory of a package's source in git-ubuntu |
+| `source_symbols` | on | Find where a function or other symbol is defined (Debian's code search index) |
+| `source_diff` | on | Diff two versions of a source package (git-ubuntu) |
+| `upstream_info` | on | Find a package's upstream homepage, repository and bug tracker |
+| `patch_applies` | on | Check whether a patch applies to a package, per series (like `patch --dry-run`) |
+| `debian_bugs` | on | List the Debian bugs of a source package, filtered by subject words |
+| `debian_bug` | on | Read a Debian bug (status and messages) |
+| `github_search` | on | Search a GitHub repository's issues, pull requests or commits |
+| `gitlab_search` | on | Search a GitLab project's issues or merge requests (salsa, freedesktop, ...) |
+| `bugzilla_search` | on | Search a Bugzilla (Red Hat/Fedora, Gentoo, Samba, Mozilla, kernel) |
+| `fetch_patch` | on | Read the patch behind a commit, pull/merge request or patch URL |
+| `verify_url` | on | Check that a URL exists before citing it |
+| `fetch_url` | off | Read a public web page (upstream trackers, mailing lists) |
+| `fetch_source` | off | Download and unpack a source package with `pull-lp-source` (runs a program) |
+| `grep_source` | off | Search the sources fetched by `fetch_source` (only with `fetch_source`) |
+| `read_source_file` | off | Read a file of the sources fetched by `fetch_source` (only with `fetch_source`) |
+
+A phase whose tools are all disabled is skipped (e.g. disabling the three
+search tools skips the upstream and other-distro searches). `github_search`
+uses your GitHub token (`GH_TOKEN`/`GITHUB_TOKEN`, or `general.github_token`)
+when there is one, for a higher rate limit.
+
+The first `--ai` run on a terminal asks which tools to enable and saves the
+answer under `[ai.tools]` in your config. Change it later with
+`startriage config ai-tools` (interactive), `--list`, or
+`--enable fetch_url --disable verify_url`. Tools only reach public addresses and
+never write anywhere, except `fetch_source`, which unpacks into a scratch
+directory under `~/.cache/startriage/ai` that is removed at the end of the run
+(keep it with `--ai-keep-workdir`).
 
 ```bash
 # Show metadata for one or more specific bugs (URL, NNNNNN, or #NNNNNN)
 startriage analyze 2101234 '#2105678'
 
-# Run the AI agent over those bugs, text-only reasoning (restricted)
-startriage analyze --ai restricted 2101234 '#2105678'
+# Run the AI agent over those bugs
+startriage analyze --ai 2101234 '#2105678'
 
-# Let the agent run tools, approving each one interactively
-startriage analyze --ai ask 2101234
-
-# Run the normal daily triage, then AI-triage every bug found (auto-approve tools)
-startriage triage --ai full
+# Run the normal daily triage, then AI-triage every bug found
+startriage triage --ai
 ```
-
-> Warning: `--ai full` auto-approves tool execution with no confirmation. Run it
-> only inside a container or otherwise isolated environment. Containerized agent
-> execution is planned as future work (see issue #4).
 
 The AI output is printed after the normal triage results. With `--markdown FILE`
 the AI section is folded into that same report file (behind a clear "review
 critically" notice) so you get a single cohesive document.
+
+Triage runs in phases, each a short session with its own instructions (the
+skills in [startriage/data/skills](startriage/data/skills)). startriage first
+routes every bug without any session:
+
+- **private** bugs are never sent to the model;
+- bugs where, in the triage window, only the team acted and nobody commented are
+  skipped;
+- bugs the team already handled (triaged, assigned, commented on before) only get
+  their new activity reviewed;
+- other bugs are validated (bug, feature request, support request, process
+  ticket, ...). Support requests, incomplete or invalid reports stop there with a
+  suggested comment; real bugs go on to a Launchpad search for existing reports,
+  searches upstream and in other distributions, an assessment of what is already
+  known or fixed, a regression check against recent uploads, an analysis of the
+  source if no fix is known, a proposed fix, and a final report.
+
+startriage checks what the model submits: cited URLs must resolve, code
+locations must exist, and a proposed patch is applied (dry run) to the affected
+series and the development release; the report lists how it applied. The
+`bitesize` tag is only accepted for a fix that applies without fuzz everywhere.
+
+The report shows what each phase did and the tokens it used. Set
+`suggest_improvements = true` under `[ai]` to also ask the model what to improve
+in the skills; its feedback is listed in the report and appended to
+`~/.local/state/startriage/skill-feedback.jsonl`.
 
 ### Configuring the AI backend
 

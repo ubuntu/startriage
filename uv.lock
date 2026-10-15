@@ -1066,7 +1066,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "aiohttp" },
-    { name = "github-copilot-sdk", marker = "extra == 'ai'" },
+    { name = "github-copilot-sdk", marker = "extra == 'ai'", specifier = ">=1.0.16" },
     { name = "launchpadlib" },
     { name = "lazr-restfulclient" },
     { name = "platformdirs" },

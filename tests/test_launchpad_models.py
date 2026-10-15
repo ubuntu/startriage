@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 from startriage.sources.launchpad.models import (
     DISTRIBUTION_SOURCE_PACKAGE_RESOURCE_TYPE_LINK,
@@ -59,6 +60,17 @@ class _FakeBug:
         self.attachments = attachments
         self.duplicate_of = duplicate_of
         self.bug_tasks = bug_tasks
+        self.owner_link = "https://api.launchpad.net/devel/~reporter"
+        self.date_created = datetime(2026, 5, 1, tzinfo=timezone.utc)
+        self.private = False
+        self.information_type = "Public"
+        self.activity = [
+            SimpleNamespace(
+                datechanged=datetime(2026, 5, 3, tzinfo=timezone.utc),
+                person_link="https://api.launchpad.net/devel/~helper",
+                whatchanged="pkg (Ubuntu): status",
+            )
+        ]
 
 
 def _build_task(duplicate_of=None) -> Task:
@@ -111,6 +123,19 @@ def test_to_agent_payload_core_fields():
     assert payload["duplicate_of"] is None
 
 
+def test_to_agent_payload_precheck_fields():
+    payload = _build_task().to_agent_payload()
+    assert payload["package"] == "pkg"
+    assert payload["reporter"] == "reporter"
+    assert payload["date_created"] == "2026-05-01T00:00:00+00:00"
+    assert payload["assignees"] == []
+    assert payload["private"] is False
+    assert payload["information_type"] == "Public"
+    assert payload["activity"] == [
+        {"date": "2026-05-03T00:00:00+00:00", "person": "helper", "what": "pkg (Ubuntu): status"}
+    ]
+
+
 def test_to_agent_payload_comments_skip_original_report():
     payload = _build_task().to_agent_payload()
     # The first message is the original report (covered by description).
@@ -124,8 +149,8 @@ def test_to_agent_payload_comments_skip_original_report():
 def test_to_agent_payload_attachments():
     payload = _build_task().to_agent_payload()
     assert payload["attachments"] == [
-        {"title": "crash.txt", "type": "Unspecified", "is_patch": False},
-        {"title": "fix.patch", "type": "Patch", "is_patch": True},
+        {"index": 0, "title": "crash.txt", "type": "Unspecified", "is_patch": False},
+        {"index": 1, "title": "fix.patch", "type": "Patch", "is_patch": True},
     ]
 
 
