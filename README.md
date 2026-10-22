@@ -199,10 +199,11 @@ works inside strict confinement; from a git checkout install the extra with
 
 ## Configuration
 
-adjust [the defaults](startriage/data/defaults.toml) with your user configuration file:
+adjust [the defaults](startriage/data/defaults.toml) with your user configuration file
+(create one interactively with `startriage init`). The first existing file is used:
 
-- for the snap: `~/snap/startriage/current/.config/startriage.toml`
-- otherwise: `~/.config/startriage.toml`
+1. `~/snap/startriage/current/.config/startriage.toml` (default, also where new configs are written)
+2. `~/.config/startriage.toml`
 
 
 ```toml

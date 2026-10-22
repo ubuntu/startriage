@@ -30,13 +30,25 @@ class AIProvider(StrEnum):
 
 
 def default_config_path() -> Path:
-    """Default config path, respecting snap confinement."""
-    if snap_data := os.environ.get("SNAP_USER_DATA"):
-        return Path(snap_data) / ".config" / "startriage.toml"
-    return Path("~/.config/startriage.toml")
+    """Default config path: the snap's config location."""
+    snap_data = os.environ.get("SNAP_USER_DATA", "~/snap/startriage/current")
+    return Path(snap_data) / ".config" / "startriage.toml"
 
 
 DEFAULT_USER_CONFIG = default_config_path()
+FALLBACK_USER_CONFIG = Path("~/.config/startriage.toml")
+USER_CONFIG_PATHS = (DEFAULT_USER_CONFIG, FALLBACK_USER_CONFIG)
+
+
+def find_user_config(config_path: Path | None = None) -> Path:
+    """Return *config_path*, else the first existing of USER_CONFIG_PATHS, else the default."""
+    if config_path:
+        return config_path.expanduser()
+    for candidate in USER_CONFIG_PATHS:
+        if candidate.expanduser().exists():
+            return candidate.expanduser()
+    return DEFAULT_USER_CONFIG.expanduser()
+
 
 # Environment variables consulted for AI credentials, in priority order.
 # Copilot mirrors the GitHub Copilot SDK's own precedence.
@@ -274,7 +286,7 @@ def update_user_config(
 
     Returns the resolved path that was written.
     """
-    path = (config_path or DEFAULT_USER_CONFIG).expanduser()
+    path = find_user_config(config_path)
     data = _load_toml(path)
 
     # Shallow-merge each top-level section
@@ -301,8 +313,10 @@ def _load_defaults(path: Traversable) -> dict:
         return tomllib.load(f)
 
 
-def load_config(user_config_path: Path | None) -> StarTriageConfig:
+def load_config(user_config_path: Path | None, *, defaults_only: bool = False) -> StarTriageConfig:
     """Load and merge defaults with user config, validated via pydantic.
+
+    With *defaults_only*, the user config is ignored.
 
     Merge strategy:
     - [general] keys are merged field-by-field (user overrides defaults)
@@ -313,8 +327,9 @@ def load_config(user_config_path: Path | None) -> StarTriageConfig:
     defaults_path = files("startriage") / "data" / "defaults.toml"
     defaults = _load_defaults(defaults_path)
 
-    path = (user_config_path or DEFAULT_USER_CONFIG).expanduser()
-    user = _load_toml(path)
+    path = find_user_config(user_config_path)
+    searched = [path] if user_config_path else [p.expanduser() for p in USER_CONFIG_PATHS]
+    user = {} if defaults_only else _load_toml(path)
     loaded_paths: list[Path] = [Path(str(defaults_path))]
     if user:
         loaded_paths.append(path)
@@ -343,7 +358,7 @@ def load_config(user_config_path: Path | None) -> StarTriageConfig:
                 "ai": merged_ai,
                 "team": merged_teams,
                 "loaded_paths": loaded_paths,
-                "searched_paths": [path],
+                "searched_paths": searched,
             }
         )
     except ValidationError as exc:
