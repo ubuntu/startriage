@@ -9,10 +9,12 @@ from pathlib import Path
 
 from .config import (
     DEFAULT_USER_CONFIG,
+    FALLBACK_USER_CONFIG,
     AIProvider,
     ConfigError,
     StarTriageConfig,
     UpdateFilter,
+    find_user_config,
     load_config,
     update_user_config,
 )
@@ -44,10 +46,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--config",
         metavar="PATH",
         type=Path,
-        help=(
-            f"Path to config TOML (default: {DEFAULT_USER_CONFIG}; "
-            "when using the snap: ~/snap/startriage/current/.config/startriage.toml)"
-        ),
+        help=(f"Path to config TOML (default: {DEFAULT_USER_CONFIG}, then {FALLBACK_USER_CONFIG})"),
     )
     parser.add_argument(
         "-v", "--verbose", action="count", default=0, help="Increase logging verbosity (repeatable)"
@@ -331,6 +330,11 @@ GREEN = done
     )
     login_p.set_defaults(func=_run_login)
 
+    # --- init ---
+    init_p = sp.add_parser("init", help="Create the user config file by answering a few questions")
+    init_p.add_argument("--force", action="store_true", help="Overwrite an existing config file")
+    init_p.set_defaults(func=_run_init, defaults_only=True)
+
     return parser
 
 
@@ -393,9 +397,25 @@ async def _run() -> None:
 
     log_setup(args.verbose - args.quiet)
 
-    config = load_config(args.config)
+    config = load_config(args.config, defaults_only=getattr(args, "defaults_only", False))
 
     await args.func(args, config)
+
+
+async def _run_init(args: argparse.Namespace, config: StarTriageConfig) -> None:
+    from .init import build_init_config, write_init_config
+
+    path = find_user_config(args.config)
+    if path.exists() and not args.force:
+        raise ConfigError(f"{path} already exists, use --force to overwrite it")
+    if not sys.stdin.isatty():
+        raise ConfigError("init asks questions and needs an interactive terminal")
+
+    print(f"Creating {path}, press Enter to accept the [default].")
+    data = build_init_config(config)
+    write_init_config(path, data)
+    print(f"\nConfig saved to {path}")
+    print("Next: 'startriage login launchpad' and 'startriage login github', then 'startriage triage'.")
 
 
 async def _run_triage(args: argparse.Namespace, config: StarTriageConfig) -> None:
