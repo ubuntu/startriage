@@ -169,6 +169,7 @@ def _search_team_tasks(distro, team, **kwargs) -> tuple[dict[tuple[str, str], ob
 _LP_IGNORE_EVENTS: dict[str, list[tuple[str, str]]] = {
     "janitor": [
         ("merge proposal linked", ".*"),
+        ("merge proposal unlinked", ".*"),
         # closing a bug fixed by an upload
         (".*: status", "Fix Released"),
         ("comment", "This bug was fixed in the package .*"),
@@ -339,8 +340,8 @@ def fetch_bugs(
             continue
         last_date, is_ours = _last_activity(last_activity_cache, src, bug_link, lp_task, team_user_links)
 
-        # only ignored events in the window: nothing to triage
-        if mode == FetchMode.triage and last_date is not None and last_date < filter.start:
+        # no relevant activity in the window: nothing to triage
+        if mode == FetchMode.triage and (last_date is None or last_date < filter.start):
             continue
 
         # Apply update filter (triage mode only)

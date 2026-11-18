@@ -4,10 +4,14 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
+from launchpadlib.launchpad import Launchpad
 
-from startriage.sources.launchpad.finder import _fetch_last_activity
+from startriage.config import TeamConfig
+from startriage.source import FetchMode, TaskFilterOptions
+from startriage.sources.launchpad.finder import _fetch_last_activity, fetch_bugs
 
 D0, D1, D2 = (datetime(2026, 10, day, tzinfo=timezone.utc) for day in (1, 2, 3))
 FIXED = "This bug was fixed in the package cacti - 1.2.31+ds1-3ubuntu2\n\n---------------\ncacti (...) ..."
@@ -53,7 +57,47 @@ def _task(messages, activity):
             [_act(D2, "janitor", "merge proposal linked", "lp:~x/+merge/1")],
             (D1, False),
         ),
+        (
+            [_msg(D1, "stranger")],
+            [_act(D2, "janitor", "merge proposal unlinked", "lp:~x/+merge/1")],
+            (D1, False),
+        ),
+        ([], [_act(D2, "janitor", "merge proposal unlinked", "lp:~x/+merge/1")], (None, False)),
     ],
 )
 def test_last_activity(messages, activity, expected):
     assert _fetch_last_activity(_task(messages, activity), {_link("member")}) == expected
+
+
+def test_triage_omits_bug_with_only_ignored_activity():
+    bug_link = "https://api.launchpad.net/devel/bugs/2171094"
+    lp_task = SimpleNamespace(
+        bug_link=bug_link,
+        target_link="https://api.launchpad.net/devel/ubuntu/+source/openssh",
+        bug=SimpleNamespace(messages=[], activity=[_act(D2, "janitor", "merge proposal unlinked")]),
+    )
+    lp = SimpleNamespace(
+        distributions={
+            "Ubuntu": SimpleNamespace(series_collection=[], searchTasks=lambda **kwargs: [lp_task])
+        },
+        people={"ubuntu-server": SimpleNamespace(participants=[])},
+    )
+    task_filter = TaskFilterOptions(
+        team="ubuntu-server",
+        start=D1,
+        end=D2,
+        recent_since=D1,
+        old_since=D0,
+        sources=frozenset(),
+        show_expiration=False,
+    )
+
+    result = fetch_bugs(
+        cast(Launchpad, lp),
+        TeamConfig(lp_team="ubuntu-server", lp_todo_tag="server-todo"),
+        task_filter,
+        FetchMode.triage,
+        update_filter=None,
+    )
+
+    assert result.tasks == []
