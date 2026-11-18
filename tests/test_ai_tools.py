@@ -7,7 +7,9 @@ import io
 import json
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from typing import cast
 
+import aiohttp
 import pytest
 
 from startriage.ai.phases import BugFacts
@@ -193,7 +195,7 @@ class _Session:
 @pytest.mark.asyncio
 async def test_http_rechecks_redirects():
     session = _Session(_Response(302, headers={"Location": "http://127.0.0.1/admin"}))
-    http = ReadOnlyHTTP(session)  # ty: ignore[invalid-argument-type]
+    http = ReadOnlyHTTP(cast(aiohttp.ClientSession, session))
     with pytest.raises(ToolError, match="non-public"):
         await http.get("http://8.8.8.8/start")
     assert len(session.requests) == 1
@@ -202,7 +204,9 @@ async def test_http_rechecks_redirects():
 @pytest.mark.asyncio
 async def test_http_bounds_body_and_scopes_credentials():
     session = _Session(_Response(body=b"a" * 100), _Response(body=b"b"))
-    http = ReadOnlyHTTP(session, credentials={"8.8.8.8": {"Authorization": "secret"}})  # ty: ignore[invalid-argument-type]
+    http = ReadOnlyHTTP(
+        cast(aiohttp.ClientSession, session), credentials={"8.8.8.8": {"Authorization": "secret"}}
+    )
     resp = await http.get("https://8.8.8.8/x", max_body=10)
     assert resp.body == b"a" * 10
     assert resp.truncated
@@ -214,7 +218,8 @@ async def test_http_bounds_body_and_scopes_credentials():
 
 @pytest.mark.asyncio
 async def test_http_post_needs_allow_list():
-    http = ReadOnlyHTTP(_Session(_Response()), allowed_posts=frozenset({"https://8.8.8.8/soap"}))  # ty: ignore[invalid-argument-type]
+    session = cast(aiohttp.ClientSession, _Session(_Response()))
+    http = ReadOnlyHTTP(session, allowed_posts=frozenset({"https://8.8.8.8/soap"}))
     with pytest.raises(ToolError, match="not allowed"):
         await http.post("https://8.8.8.8/other", b"", {})
     resp = await http.post("https://8.8.8.8/soap", b"<q/>", {})
@@ -227,7 +232,7 @@ async def test_http_network_errors_are_tool_errors():
         def request(self, method, url, **kwargs):
             raise TimeoutError
 
-    http = ReadOnlyHTTP(_Timeout())  # ty: ignore[invalid-argument-type]
+    http = ReadOnlyHTTP(cast(aiohttp.ClientSession, _Timeout()))
     with pytest.raises(NetworkError) as excinfo:
         await http.head("https://8.8.8.8/x")
     assert str(excinfo.value) == "HEAD https://8.8.8.8/x failed: TimeoutError"

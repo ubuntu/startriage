@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 import pytest
 
 from startriage.ai import (
@@ -13,6 +15,7 @@ from startriage.ai import (
 )
 from startriage.cli import _build_parser
 from startriage.config import AIConfig, StarTriageConfig
+from startriage.sources.launchpad.models import Task
 
 _VALIDATION = {
     "verdict": "support",
@@ -79,13 +82,13 @@ class _FakeTask:
 
 def test_payloads_from_tasks_dedupes_by_number():
     tasks = [_FakeTask("1"), _FakeTask("1"), _FakeTask("2")]
-    payloads = payloads_from_tasks(tasks)  # ty: ignore[invalid-argument-type]
+    payloads = payloads_from_tasks(cast(list[Task], tasks))
     assert [p["number"] for p in payloads] == ["1", "2"]
 
 
 def test_payloads_from_tasks_skips_failures():
     tasks = [_FakeTask("1"), _FakeTask("2", raises=True), _FakeTask("3")]
-    payloads = payloads_from_tasks(tasks)  # ty: ignore[invalid-argument-type]
+    payloads = payloads_from_tasks(cast(list[Task], tasks))
     assert [p["number"] for p in payloads] == ["1", "3"]
 
 

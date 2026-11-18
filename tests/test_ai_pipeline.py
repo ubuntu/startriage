@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 import logging
 from datetime import UTC, datetime
+from typing import cast
 
+import aiohttp
 import pytest
 
 from startriage.ai import FakeProvider, FakeTurn, Pipeline, triage_bugs
@@ -623,7 +625,7 @@ async def test_offline_end_to_end_analysis_and_fix_against_recorded_git_ubuntu(m
     monkeypatch.setattr(tools_module.http, "check_public_url", public)
     monkeypatch.setattr(archive_module, "series", series)
     session = ReplaySession("source")
-    http = ReadOnlyHTTP(session)  # ty: ignore[invalid-argument-type]
+    http = ReadOnlyHTTP(cast(aiohttp.ClientSession, session))
     names = ["source_symbols", "source_file", "patch_applies", "fetch_patch"]
     tools = {t.name: t for t in build_tools(ToolContext(http=http), names)}
     symbols, read = TOOL_CALLS["source"][2], TOOL_CALLS["source"][5]

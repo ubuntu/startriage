@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 import pytest
 
 from startriage.ai import checks
 from startriage.ai.checks import URLChecker, check_bug_ref, check_series
 from startriage.ai.skills import CORE, PHASES, load_package_notes, load_skill, system_prompt
-from startriage.ai.tools import REGISTRY, ToolError
+from startriage.ai.tools import REGISTRY, ReadOnlyHTTP, ToolError
 from startriage.ai.tools.http import NetworkError
 
 # --- skills -----------------------------------------------------------------
@@ -85,7 +87,7 @@ async def test_url_checker(monkeypatch, caplog):
         return 200, url
 
     monkeypatch.setattr(checks, "url_status", fake_status)
-    checker = URLChecker(http=object())  # ty: ignore[invalid-argument-type]
+    checker = URLChecker(http=cast(ReadOnlyHTTP, object()))
     urls = [
         "https://ok.test",
         "https://missing.test",

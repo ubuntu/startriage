@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from typing import cast
+
+import aiohttp
 import pytest
 
 from startriage.ai import tools as tools_module
@@ -28,7 +31,8 @@ def _no_dns(monkeypatch):
 
 def _http(name: str) -> tuple[ReadOnlyHTTP, ReplaySession]:
     session = ReplaySession(name)
-    return ReadOnlyHTTP(session, allowed_posts=debian.ALLOWED_POSTS), session  # ty: ignore[invalid-argument-type]
+    http = ReadOnlyHTTP(cast(aiohttp.ClientSession, session), allowed_posts=debian.ALLOWED_POSTS)
+    return http, session
 
 
 async def _call(http: ReadOnlyHTTP, fixture: str, index: int) -> tuple[str, bool]:

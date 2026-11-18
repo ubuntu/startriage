@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
-from typing import Any
+from typing import Any, cast
 
 import aiohttp
 
@@ -101,7 +101,8 @@ async def main() -> None:
     async with aiohttp.ClientSession() as session:
         for name in sys.argv[1:] or TOOL_CALLS:
             recorder = Recorder(session)
-            http = ReadOnlyHTTP(recorder, allowed_posts=debian.ALLOWED_POSTS)  # ty: ignore[invalid-argument-type]
+            recording_session = cast(aiohttp.ClientSession, recorder)
+            http = ReadOnlyHTTP(recording_session, allowed_posts=debian.ALLOWED_POSTS)
             for key, text in (await run_calls(http, name)).items():
                 print(f"===== {name} {key}\n{text[:1500]}\n")
             recorder.save(name)
