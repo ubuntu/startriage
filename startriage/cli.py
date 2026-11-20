@@ -45,8 +45,7 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="PATH",
         type=Path,
         help=(
-            f"Path to config TOML (default: {DEFAULT_USER_CONFIG}; "
-            "when using the snap: ~/snap/startriage/current/.config/startriage.toml)"
+            f"Path to config TOML (default: {DEFAULT_USER_CONFIG})"
         ),
     )
     parser.add_argument(
