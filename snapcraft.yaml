@@ -20,7 +20,7 @@ issues: https://github.com/ubuntu/startriage/issues
 source-code: https://github.com/ubuntu/startriage
 website: https://github.com/ubuntu/startriage
 
-base: core24
+base: core26
 type: app
 version: git
 confinement: strict
@@ -55,8 +55,10 @@ parts:
     # github-copilot-sdk bundles the Copilot CLI runtime binary it spawns, so no
     # separate Node part is needed; pip ships the runtime inside the snap.
     python-packages:
-      - github-copilot-sdk>=1.0.16
+      - github-copilot-sdk<2
     stage-packages:
+      # core26 does not include Python
+      - python3-venv
       # pull-lp-source / dpkg-source / debdiff for the agent's source analysis.
       - ubuntu-dev-tools
       # patch --dry-run for patch_applies.
