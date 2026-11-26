@@ -31,6 +31,7 @@ class OutputConfig:
     bug_persistor: BugPersistor | None = None
     markdown_path: Path | None = None
     html_path: Path | None = None
+    ai_json_path: Path | None = None
 
 
 class Flag(StrEnum):

@@ -131,17 +131,18 @@ startriage analyze --ai 2101234 '#2105678'
 # Run the normal daily triage, then AI-triage every bug found
 startriage triage --ai
 
-# Include inline AI analysis in the HTML report (and stream thinking live)
-startriage triage --ai --ai-show-thinking --html ~/triage.html
+# Include inline AI analysis in the HTML report, stream thinking, and save JSON
+startriage triage --ai --ai-show-thinking --html ~/triage.html --ai-json ~/triage-ai.json
 ```
 
 Live progress is printed per bug on stderr (use `-v` for phase/tool steps or
 `--ai-show-thinking` to stream model reasoning). With `--markdown FILE` the AI
 section is folded into that report file; with `--html FILE` each analyzed row
 gets an expandable inline AI panel (leaving your own comment box untouched)
-alongside embedded structured action JSON. Without `--markdown` or `--html`,
-the AI report is printed to stdout (and `--format json` includes it under
-`"ai"`).
+alongside embedded structured action JSON; with `--ai-json FILE` the structured
+`AIRun` (item snapshots, analysis, and recommended actions) is written as JSON.
+Without any of those file flags, the AI report is printed to stdout (and
+`--format json` includes it under `"ai"`).
 
 Triage runs in phases, each a short session with its own instructions (the
 skills in [startriage/data/skills](startriage/data/skills)). startriage first

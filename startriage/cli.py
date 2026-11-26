@@ -146,6 +146,14 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Stream the AI agent's thinking and tool steps to the terminal while analyzing",
     )
+    ai_p.add_argument(
+        "--ai-json",
+        metavar="PATH",
+        help=(
+            "Write structured AI analysis and recommended actions as JSON to PATH. "
+            "As a snap, /tmp is private; use a path under your home directory."
+        ),
+    )
 
     list_p = argparse.ArgumentParser(
         add_help=False,
@@ -368,6 +376,7 @@ def _filter_from_args(
 
 
 def _outputcfg_from_args(args: argparse.Namespace, persistor: BugPersistor | None = None) -> OutputConfig:
+    ai_json = getattr(args, "ai_json", None)
     return OutputConfig(
         fmt=args.format,
         out=sys.stdout,
@@ -375,6 +384,7 @@ def _outputcfg_from_args(args: argparse.Namespace, persistor: BugPersistor | Non
         terminal_links=not args.fullurls,
         markdown_path=Path(args.markdown) if args.markdown else None,
         html_path=Path(args.html) if args.html else None,
+        ai_json_path=Path(ai_json) if ai_json else None,
         bug_persistor=persistor,
     )
 
@@ -518,25 +528,31 @@ async def _run_analyze(args: argparse.Namespace, config: StarTriageConfig) -> No
         print(report)
         return
 
-    from .ai import build_provider, run_ai_over_bug_specs
+    from .ai import RunOptions, analyze_bug_specs, build_provider
     from .ai.tool_choice import resolve_tools
 
     provider = build_provider(config.ai)
     resolve_tools(config, args.config)
     lp = await asyncio.to_thread(connect_launchpad, config.general.lp_credentials_file)
-    report = await run_ai_over_bug_specs(
+    batch = await analyze_bug_specs(
         config,
         lp,
         args.bug,
         provider=provider,
-        keep_workdir=args.ai_keep_workdir,
-        verbose=args.verbose > 0,
-        show_thinking=args.ai_show_thinking,
+        options=RunOptions(
+            keep_workdir=args.ai_keep_workdir,
+            verbose=args.verbose > 0,
+            show_thinking=args.ai_show_thinking,
+        ),
     )
-    if report is None:
+    if batch is None:
         print("No valid bugs to triage.", file=sys.stderr)
         return
-    print(report)
+    if args.ai_json:
+        path = batch.run.write_json(Path(args.ai_json))
+        print(f"AI analysis JSON written to {path}", file=sys.stderr)
+    else:
+        print(batch.to_markdown())
 
 
 async def _set_config_settings(args: argparse.Namespace, _config: StarTriageConfig) -> None:

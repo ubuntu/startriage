@@ -119,12 +119,17 @@ async def emit_triage_outputs(
             )
             logging.info("HTML written to %s", output_cfg.html_path)
 
+    if ai_run is not None and output_cfg.ai_json_path:
+        ai_run.write_json(output_cfg.ai_json_path)
+        logging.info("AI analysis JSON written to %s", output_cfg.ai_json_path)
+
     # When AI ran without a file target (or JSON format), print the AI markdown to stdout.
     if (
         ai_markdown
         and output_cfg.fmt != OutputFormat.JSON
         and output_cfg.markdown_path is None
         and output_cfg.html_path is None
+        and output_cfg.ai_json_path is None
     ):
         print("\n" + ai_markdown, file=output_cfg.out)
 

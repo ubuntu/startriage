@@ -171,6 +171,9 @@ def test_parser_ai_is_a_plain_flag():
     assert _build_parser().parse_args(["triage"]).ai_show_thinking is False
     assert _build_parser().parse_args(["triage", "--ai", "--ai-show-thinking"]).ai_show_thinking is True
     assert _build_parser().parse_args(["analyze", "--ai", "--ai-show-thinking", "1"]).ai_show_thinking is True
+    assert _build_parser().parse_args(["triage"]).ai_json is None
+    assert _build_parser().parse_args(["triage", "--ai", "--ai-json", "out.json"]).ai_json == "out.json"
+    assert _build_parser().parse_args(["analyze", "--ai", "--ai-json", "a.json", "1"]).ai_json == "a.json"
 
 
 # --- analyze_work_items, live progress & thinking --------------------------
@@ -284,20 +287,31 @@ async def test_emit_triage_outputs_suppresses_stdout_with_html_and_includes_ai_i
     assert batch is not None
     ai_md = batch.to_markdown()
 
-    # With --html, stdout receives no AI dump, and HTML embeds the AI run.
+    # With --html/--markdown/--ai-json, stdout receives no AI dump and each file gets the AI data.
     html_path = tmp_path / "triage.html"
     md_path = tmp_path / "triage.md"
+    ai_json_path = tmp_path / "ai.json"
     stdout = io.StringIO()
     await emit_triage_outputs(
         {"github": gh},
         opts,
-        OutputConfig(fmt=OutputFormat.TERMINAL, out=stdout, html_path=html_path, markdown_path=md_path),
+        OutputConfig(
+            fmt=OutputFormat.TERMINAL,
+            out=stdout,
+            html_path=html_path,
+            markdown_path=md_path,
+            ai_json_path=ai_json_path,
+        ),
         ai_run=batch.run,
         ai_markdown=ai_md,
     )
     assert stdout.getvalue() == ""
     assert "Automated triage" in md_path.read_text()
     assert '<script type="application/json" id="ai-data">' in html_path.read_text()
+    saved_ai = json.loads(ai_json_path.read_text())
+    assert saved_ai["schema_version"] == 1
+    assert saved_ai["items"][0]["key"] == "123"
+    assert [a["kind"] for a in saved_ai["items"][0]["actions"]] == ["tracker_update"]
 
     # Without --html/--markdown, AI markdown goes to stdout.
     stdout_only = io.StringIO()

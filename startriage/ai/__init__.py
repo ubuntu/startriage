@@ -27,6 +27,7 @@ from .render import (
 from .run import (
     AITriageBatch,
     RunOptions,
+    analyze_bug_specs,
     analyze_triage_results,
     analyze_work_items,
     describe_bug_specs,
@@ -55,6 +56,7 @@ __all__ = [
     "SessionEventKind",
     "SessionResult",
     "SessionSpec",
+    "analyze_bug_specs",
     "analyze_triage_results",
     "analyze_work_items",
     "append_report",

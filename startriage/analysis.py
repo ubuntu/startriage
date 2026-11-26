@@ -12,7 +12,9 @@ Top-level shape of an :class:`AIRun`:
 
 from __future__ import annotations
 
+import json
 from enum import StrEnum
+from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -227,3 +229,8 @@ class AIRun(BaseModel):
 
     def to_dict(self) -> dict[str, Any]:
         return self.model_dump(mode="json")
+
+    def write_json(self, path: Path) -> Path:
+        """Write this run as formatted JSON to ``path``."""
+        path.write_text(json.dumps(self.to_dict(), indent=2) + "\n", encoding="utf-8")
+        return path

@@ -322,6 +322,29 @@ async def run_agent_on_payloads(
     return batch.to_markdown() if batch is not None else None
 
 
+async def analyze_bug_specs(
+    config: StarTriageConfig,
+    lp: Launchpad,
+    bug_specs: list[str],
+    *,
+    provider: Provider | None = None,
+    options: RunOptions | None = None,
+) -> AITriageBatch | None:
+    """Resolve user-supplied bug specs into WorkItems and run AI analysis."""
+    payloads = await asyncio.to_thread(gather_user_bug_payloads, lp, bug_specs)
+    if not payloads:
+        return None
+    team: frozenset[str] = frozenset()
+    try:
+        lp_team = config.get_team(resolve_team_name(None, config)).lp_team
+    except KeyError:
+        logger.info("No default team: no activity counts as the team's")
+    else:
+        team = await asyncio.to_thread(team_members, lp, lp_team)
+    items = [work_item_from_payload(p) for p in payloads]
+    return await analyze_work_items(config, items, lp=lp, provider=provider, team=team, options=options)
+
+
 async def run_ai_over_bug_specs(
     config: StarTriageConfig,
     lp: Launchpad,
@@ -338,26 +361,14 @@ async def run_ai_over_bug_specs(
     resolved from ``bug_specs``. Launchpad access runs off-thread so the async
     event loop is not blocked.
     """
-    payloads = await asyncio.to_thread(gather_user_bug_payloads, lp, bug_specs)
-    if not payloads:
-        return None
-    team: frozenset[str] = frozenset()
-    try:
-        lp_team = config.get_team(resolve_team_name(None, config)).lp_team
-    except KeyError:
-        logger.info("No default team: no activity counts as the team's")
-    else:
-        team = await asyncio.to_thread(team_members, lp, lp_team)
-    return await run_agent_on_payloads(
+    batch = await analyze_bug_specs(
         config,
-        payloads,
-        lp=lp,
+        lp,
+        bug_specs,
         provider=provider,
-        team=team,
-        keep_workdir=keep_workdir,
-        verbose=verbose,
-        show_thinking=show_thinking,
+        options=RunOptions(keep_workdir=keep_workdir, verbose=verbose, show_thinking=show_thinking),
     )
+    return batch.to_markdown() if batch is not None else None
 
 
 async def describe_bug_specs(lp: Launchpad, bug_specs: list[str]) -> str | None:
