@@ -1,287 +1,132 @@
 # startriage
 
-Unified triage tool for Ubuntu
+Unified triage and housekeeping tool for Ubuntu teams, pulling Launchpad bugs, GitHub issues/PRs, Discourse topics, and proposed-migration excuses into one view (terminal, Markdown, interactive HTML, or JSON), with optional read-only AI bug analysis.
 
-- Launchpad
-- GitHub
-- Discourse
-- Proposed migration
-
-## Installation
+## Install & Login
 
 ```bash
 snap install startriage
-# or clone this git repo, then run with:
-uv run startriage
+# or from a git checkout (add `--extra ai` for AI triage):
+uv sync && uv run startriage
 ```
 
-## Quick Start
-
-```bash
-# Daily triage (yesterday's activity, or Friday–Sunday if today is Monday)
-startriage triage
-
-# Generate an interactive HTML report
-# that allows filling a discourse post markdown template
-# (remember /tmp/ is private when running as snap)
-startriage triage --html ~/triage.html
-
-# Generate a markdown report as template for discourse alongside
-startriage triage --markdown ~/triage-summary.md
-
-# Specify a team explicitly
-startriage -t ubuntu-server triage
-
-# Use a subset of sources
-startriage -s discourse,github triage
-
-# Changes on a specific day or range
-startriage triage -i monday
-startriage triage -i yesterday:  # changes since yesterday
-startriage triage -i 2026-04-14
-startriage triage -i 2026-04-14:2026-04-18  # range is inclusive
-
-# Housekeeping: server-todo tagged bugs with assignees
-startriage todo
-# Generate an interactive web page as for a housekeeping meeting
-startriage todo --html ~/todo.html
-
-# Subscription backlog (ubuntu-server subscribed bugs)
-startriage todo --subscribed
-```
-
-## Triage Options
-
-| Option | Description |
-|--------|-------------|
-| `-t --team TEAM` | Select a configured team |
-| `-i --interval DATE[:DATE]` | Include changes from this day or range (YYYY-MM-DD, day name, or `yesterday`) |
-| `-s --source SOURCE` | Restrict to one source: `launchpad`, `discourse`, `github` |
-| `--update {theirs,ours,all}` | Filter bugs by who last updated them |
-| `--flag-recent DAYS` | Mark bugs updated within N days with `U` flag |
-| `--flag-old DAYS` | Mark bugs inactive for more than N days with `O` flag |
-| `--open -o` | Open results in the web browser |
-| `--fullurls` | Print full URLs instead of terminal hyperlinks |
-| `--markdown PATH` | Write parallel markdown output (for pasting into Discourse posts) |
-| `--html PATH` | Write a single-page html report whose rows can be checked off |
-
-Run `startriage triage --help` for the full option reference, including the bug flags legend.
-
-## AI Triage (experimental)
-
-Inspect one or more Launchpad bugs, optionally running an AI agent over them. By
-default `analyze` prints the bug metadata (status, tags, affected targets,
-description, comments) so you can eyeball it — no provider or credentials
-required. Add `--ai` to run the agent, which produces a suggested status, tags,
-analysis, and (where applicable) a proposed fix. The agent never edits bugs and
-never applies patches — it only prints its analysis.
-
-`--ai` needs a provider, a model and credentials, see
-[Configuring the AI backend](#configuring-the-ai-backend).
-
-The agent has no shell and none of the model's built-in tools. It can only call
-the tools startriage provides, all read-only except `fetch_source`, which runs
-`pull-lp-source` (off by default):
-
-| Tool | Default | What it does |
-| --- | --- | --- |
-| `lp_get_bug` | on | Read a public Launchpad bug (metadata, description, comments) |
-| `lp_get_attachment` | on | Read or grep a text attachment of a public bug |
-| `lp_search_bugs` | on | Search public bugs of a source package (duplicates, related bugs) |
-| `pkg_versions` | on | Versions of a source package per pocket in each supported series |
-| `pkg_changelog` | on | Read or grep the `debian/changelog` of an Ubuntu or Debian package version |
-| `source_file` | on | Read one file of a package's source from git-ubuntu (no download) |
-| `source_list` | on | List a directory of a package's source in git-ubuntu |
-| `source_symbols` | on | Find where a function or other symbol is defined (Debian's code search index) |
-| `source_diff` | on | Diff two versions of a source package (git-ubuntu) |
-| `upstream_info` | on | Find a package's upstream homepage, repository and bug tracker |
-| `patch_applies` | on | Check whether a patch applies to a package, per series (like `patch --dry-run`) |
-| `debian_bugs` | on | List the Debian bugs of a source package, filtered by subject words |
-| `debian_bug` | on | Read a Debian bug (status and messages) |
-| `github_search` | on | Search a GitHub repository's issues, pull requests or commits |
-| `gitlab_search` | on | Search a GitLab project's issues or merge requests (salsa, freedesktop, ...) |
-| `bugzilla_search` | on | Search a Bugzilla (Red Hat/Fedora, Gentoo, Samba, Mozilla, kernel) |
-| `fetch_patch` | on | Read the patch behind a commit, pull/merge request or patch URL |
-| `verify_url` | on | Check that a URL exists before citing it |
-| `fetch_url` | off | Read a public web page (upstream trackers, mailing lists) |
-| `fetch_source` | off | Download and unpack a source package with `pull-lp-source` (runs a program) |
-| `grep_source` | off | Search the sources fetched by `fetch_source` (only with `fetch_source`) |
-| `read_source_file` | off | Read a file of the sources fetched by `fetch_source` (only with `fetch_source`) |
-
-A phase whose tools are all disabled is skipped (e.g. disabling the three
-search tools skips the upstream and other-distro searches). `github_search`
-uses your GitHub token (`GH_TOKEN`/`GITHUB_TOKEN`, or `general.github_token`)
-when there is one, for a higher rate limit.
-
-The first `--ai` run on a terminal asks which tools to enable and saves the
-answer under `[ai.tools]` in your config. Change it later with
-`startriage config ai-tools` (interactive), `--list`, or
-`--enable fetch_url --disable verify_url`. Tools only reach public addresses and
-never write anywhere, except `fetch_source`, which unpacks into a scratch
-directory under `~/.cache/startriage/ai` that is removed at the end of the run
-(keep it with `--ai-keep-workdir`).
-
-```bash
-# Show metadata for one or more specific bugs (URL, NNNNNN, or #NNNNNN)
-startriage analyze 2101234 '#2105678'
-
-# Run the AI agent over those bugs
-startriage analyze --ai 2101234 '#2105678'
-
-# Run the normal daily triage, then AI-triage every bug found
-startriage triage --ai
-
-# Include inline AI analysis in the HTML report, stream thinking, and save JSON
-startriage triage --ai --ai-show-thinking --html ~/triage.html --ai-json ~/triage-ai.json
-```
-
-Live progress is printed per bug on stderr (use `-v` for phase/tool steps or
-`--ai-show-thinking` to stream model reasoning). With `--markdown FILE` the AI
-section is folded into that report file; with `--html FILE` each analyzed row
-gets an expandable inline AI panel (leaving your own comment box untouched)
-alongside embedded structured action JSON; with `--ai-json FILE` the structured
-`AIRun` (item snapshots, analysis, and recommended actions) is written as JSON.
-Without any of those file flags, the AI report is printed to stdout (and
-`--format json` includes it under `"ai"`).
-
-Triage runs in phases, each a short session with its own instructions (the
-skills in [startriage/data/skills](startriage/data/skills)). startriage first
-routes every bug without any session:
-
-- **private** bugs are never sent to the model;
-- bugs where, in the triage window, only the team acted and nobody commented are
-  skipped;
-- bugs the team already handled (triaged, assigned, commented on before) only get
-  their new activity reviewed;
-- other bugs are validated (bug, feature request, support request, process
-  ticket, ...). Support requests, incomplete or invalid reports stop there with a
-  suggested comment; real bugs go on to a Launchpad search for existing reports,
-  searches upstream and in other distributions, an assessment of what is already
-  known or fixed, a regression check against recent uploads, an analysis of the
-  source if no fix is known, a proposed fix, and a final report.
-
-startriage checks what the model submits: cited URLs must resolve, code
-locations must exist, and a proposed patch is applied (dry run) to the affected
-series and the development release; the report lists how it applied. The
-`bitesize` tag is only accepted for a fix that applies without fuzz everywhere.
-
-The report shows what each phase did and the tokens it used. Set
-`suggest_improvements = true` under `[ai]` to also ask the model what to improve
-in the skills; its feedback is listed in the report and appended to
-`~/.local/state/startriage/skill-feedback.jsonl`.
-
-### Configuring the AI backend
-
-There is no default provider or model, so `--ai` fails until you choose both:
-
-| `ai.provider` | Backend | Credential |
-| --- | --- | --- |
-| `copilot` | GitHub Copilot, via the bundled Copilot CLI | GitHub token with Copilot enabled |
-| `openrouter` | Any OpenAI-compatible endpoint (BYOK), defaulting to OpenRouter | OpenRouter API key |
-
-`ai.model` is passed to the provider as is: look up the id in
-[Copilot's supported models](https://docs.github.com/en/copilot/reference/ai-models/supported-models)
-or on [openrouter.ai/models](https://openrouter.ai/models).
-
-Credentials are written to the 0600 config file and never echoed:
-
-```bash
-# GitHub Copilot (needs a Copilot-enabled account)
-startriage config set --ai-provider copilot \
-    --ai-model <copilot-model-id> \
-    --ai-github-token github_pat_...
-
-# Or bring your own key via an OpenAI-compatible provider (e.g. OpenRouter)
-startriage config set --ai-provider openrouter \
-    --ai-model <openrouter-model-id> \
-    --ai-openrouter-key sk-or-...
-```
-
-The Copilot token may also come from `COPILOT_GITHUB_TOKEN` / `GH_TOKEN` /
-`GITHUB_TOKEN`, and the OpenRouter key from `OPENROUTER_API_KEY`; the config file
-wins over the environment.
-
-The snap bundles the Copilot runtime and `ubuntu-dev-tools`, so source analysis
-works inside strict confinement; from a git checkout install the extra with
-`uv sync --extra ai`.
-
-## Configuration
-
-adjust [the defaults](startriage/data/defaults.toml) with your user configuration file:
-
-- for the snap: `~/snap/startriage/current/.config/startriage.toml`
-- otherwise: `~/.config/startriage.toml`
-
-
-```toml
-[general]
-triage_updates = "theirs"   # theirs | ours | all
-default_team = "ubuntu-server"
-savebugs_dir = "~/your-path-to-persisting-bug-progress"
-
-[team.ubuntu-server]
-lp_team = "ubuntu-server"
-lp_todo_tag = "server-todo"
-lp_discuss_tag = "server-triage-discuss"
-lp_ignore_packages = ["linux", "linux-meta"]
-discourse_categories = ["project/server"]
-discourse_triage_categories = ["project/server/server-triage"]  # suppress triage-post main entries; show replies only
-github_repos = ["canonical/ubuntu-server-documentation"]
-# members of this GitHub team count as the team: other people's comments are "external updates"
-github_team = "canonical/ubuntu-server-distro"
-proposed_migration_teams = ["ubuntu-server"]
-
-# other team definitions
-```
-
-Persist common settings without editing the file by hand:
-
-```bash
-startriage config show
-startriage config set --default-team ubuntu-server
-```
-
-Authorize access once:
+Authorize Launchpad and GitHub once:
 
 ```bash
 startriage login launchpad
 startriage login github
 ```
 
-## Save / Compare Bug Lists
+## Quick Start
 
 ```bash
-# Auto-save and auto-compare (uses the most recent file in startriage.toml general.savebugs_dir)
-startriage todo
+# Daily triage for your default team (yesterday, or Fri–Sun on Monday)
+startriage triage
 
-# specify directory to save/compare todo-$(date) files with current bugs (override for general.savebugs_dir)
-startriage todo --save-bugs-dir ~/savebugs
+# Triage for a different configured team
+startriage -t my-team triage
 
-# Save today's todo list
-startriage todo -S ~/savebugs/todo-$(date -I).yaml
+# Generate an interactive HTML page (with checkboxes + Discourse export) or Markdown
+# Note: in the snap, /tmp is private — write under your home directory
+startriage triage --html ~/triage.html
+startriage triage --markdown ~/triage.md
 
-# Compare against a previous save to spot new and closed bugs
-startriage todo -C ~/savebugs/todo-2026-04-01.yaml
+# Limit to specific sources or a date/range
+startriage triage -s launchpad,github -i 2026-04-14:2026-04-18
+startriage triage -i yesterday:
+
+# Weekly housekeeping of team todo-tagged bugs (and subscription backlog)
+startriage todo --html ~/todo.html
+startriage todo --subscribed
+
+# Inspect one or more Launchpad bugs (URL, NNNNNN, or #NNNNNN)
+startriage analyze 2101234 '#2105678'
+
+# Run the AI triage agent on a single bug, or across a full daily triage
+startriage analyze --ai 2101234
+startriage -t my-team analyze --ai 2101234
+startriage triage --ai --html ~/triage.html
 ```
+
+Run `startriage --help` or `startriage <command> --help` (`triage`, `todo`, `analyze`, `config`, `login`) for all flags, interval formats, save/compare options, and the terminal bug-flags legend.
+
+## Configuration
+
+`startriage` ships defaults for `ubuntu-server` in [defaults.toml](startriage/data/defaults.toml).
+Override them or add your own team in your user config file:
+
+- Snap: `~/snap/startriage/current/.config/startriage.toml`
+- Otherwise: `~/.config/startriage.toml`
+
+```toml
+[general]
+default_team = "my-team"                 # used when -t/--team is omitted
+triage_updates = "theirs"                # theirs | ours | all
+savebugs_dir = "~/startriage-history"    # auto-save & diff weekly `todo` runs
+proposed_min_age = 4                     # days stuck in proposed before showing up
+# lp_expire_level1_days = 60
+# lp_expire_level2_days = 180
+
+[team.my-team]
+lp_team = "ubuntu-desktop"               # Launchpad team slug
+lp_todo_tag = "desktop-todo"             # tag tracked by `todo`
+lp_discuss_tag = "desktop-discuss"       # optional: tag for ambiguous bugs
+lp_freezer_tag = "desktop-freezer"       # optional: deferred todo bucket
+lp_ignore_packages = ["linux", "linux-meta"]
+discourse_categories = ["desktop"]
+discourse_triage_categories = ["desktop/triage"]  # show replies only
+github_repos = [
+    "canonical/my-repo",
+    {name = "canonical/my-docs", todo_labels = ["todo"]},
+]
+github_todo_labels = ["desktop-todo"]
+github_ignore_labels = ["triage-ignore"]
+github_team = "canonical/ubuntu-desktop" # members count as "ours" for --update
+proposed_migration_teams = ["ubuntu-desktop"]
+```
+
+Inspect the resolved config or persist common settings from the CLI:
+
+```bash
+startriage config show
+startriage config set --default-team my-team
+startriage config set --help
+```
+
+## AI Triage (experimental)
+
+Add `--ai` to `analyze` or `triage` to run a phased, read-only triage agent over Launchpad bugs.
+The agent never edits bugs or applies patches: it validates reports, searches Launchpad/Debian/upstream/other distros, checks recent uploads for regressions, analyzes source, dry-run checks candidate patches, and outputs suggested status, tags, comments, and structured actions (printed to stdout, embedded into `--html` / `--markdown` / `--format json`, or saved via `--ai-json`).
+Private bugs are never sent to the model.
+
+There is no default provider or model; pick one knowingly:
+
+```bash
+# GitHub Copilot (or set COPILOT_GITHUB_TOKEN / GH_TOKEN / GITHUB_TOKEN)
+startriage config set --ai-provider copilot --ai-model <model-id> --ai-github-token github_pat_...
+
+# OpenRouter / OpenAI-compatible BYOK (or set OPENROUTER_API_KEY)
+startriage config set --ai-provider openrouter --ai-model <model-id> --ai-openrouter-key sk-or-...
+```
+
+Model IDs are passed as-is ([Copilot models](https://docs.github.com/copilot/reference/ai-models/supported-models), [OpenRouter models](https://openrouter.ai/models)).
+The agent can only use the tools enabled under `[ai.tools]` (read-only by default; `fetch_url` and `fetch_source` are off until enabled).
+Inspect or toggle tools with `startriage config ai-tools` (`--list`, `--enable`, `--disable`), and see `startriage analyze --help` for `--ai-show-thinking`, `--ai-json`, and `--ai-keep-workdir`.
+Set `suggest_improvements = true` under `[ai]` to also collect skill improvement suggestions in `~/.local/state/startriage/skill-feedback.jsonl`.
 
 ## Library Usage
 
-Fetch structured results without rendering, e.g. for a web backend:
+Use `startriage` from Python without rendering (nothing prompts; authorize with `startriage login` first):
 
 ```python
 from startriage.config import load_config
 from startriage.source import FetchMode
 from startriage.triage import build_filter, fetch
 
-config = load_config(None)  # or construct a StarTriageConfig directly
-opts = build_filter(config, interval="yesterday", sources="launchpad,github")
-results = await fetch(config, opts, FetchMode.triage)  # or FetchMode.todo
+config = load_config(None)
+opts = build_filter(config, team="my-team", interval="yesterday", sources="launchpad,github")
+results = await fetch(config, opts, FetchMode.triage)
 
 for source, result in results.items():
-    data = await result.to_dict()  # JSON-ready with json_default; {"error": ...} if the fetch failed
+    data = await result.to_dict()  # same payload as `--format json`
 ```
-
-The objects in `results` (e.g. `LaunchpadTriage.tasks`) are available as well.
-`startriage triage --format json` prints the same `to_dict()` data.
-
-Nothing prompts: without stored credentials (`startriage login launchpad`, path in `general.lp_credentials_file`), the Launchpad result carries a `LaunchpadAuthError`.
