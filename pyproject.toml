@@ -79,6 +79,9 @@ ignore = ["E722", "PLR2004", "PLR0912", "PLR5501", "PLC0415", "PLR0911", "C408",
 mccabe.max-complexity = 25
 pylint.max-args = 10
 
+[tool.ty.analysis]
+allowed-unresolved-imports = ["copilot", "copilot.*"]
+
 [tool.pytest.ini_options]
 xfail_strict = true
 testpaths = ["tests"]

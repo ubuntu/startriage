@@ -167,9 +167,9 @@ class CopilotProvider(Provider):
         self.model = ai_config.model
 
     async def run(self, spec: SessionSpec) -> SessionResult:
-        from copilot import CopilotClient  # ty: ignore[unresolved-import]
-        from copilot.rpc import PermissionDecisionReject  # ty: ignore[unresolved-import]
-        from copilot.tools import Tool, ToolResult  # ty: ignore[unresolved-import]
+        from copilot import CopilotClient
+        from copilot.rpc import PermissionDecisionReject
+        from copilot.tools import Tool, ToolResult
 
         result = SessionResult()
         supervisor = Supervisor(
