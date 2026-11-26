@@ -22,6 +22,7 @@ from startriage.ai.tools import ReadOnlyHTTP, ToolContext, ToolError, build_tool
 from startriage.ai.tools import patch as patch_module
 from startriage.ai.tools import source as source_module
 from startriage.ai.tools.source import UpstreamInfo
+from startriage.config import TeamConfig
 
 from .http_replay import ReplaySession
 from .record_ai_fixtures import NGINX_FIX, TOOL_CALLS
@@ -282,6 +283,9 @@ async def test_report_check_rejects_unverifiable_tags_and_the_model_repairs():
 
 @pytest.mark.asyncio
 async def test_failed_report_falls_back_to_a_host_result():
+    team_cfg = TeamConfig(
+        lp_team="ubuntu-desktop", lp_todo_tag="desktop-todo", lp_discuss_tag="desktop-discuss"
+    )
     provider = FakeProvider(
         [
             _session("submit_validation", BUG),
@@ -289,12 +293,26 @@ async def test_failed_report_falls_back_to_a_host_result():
             [FakeTurn(text="no"), FakeTurn(text="no")],
         ]
     )
-    outcome = await _pipeline(provider).triage(_payload())
+    outcome = await _pipeline(provider, team_config=team_cfg).triage(_payload())
     assert ("write-report", "failed") in _phases(outcome)
     assert outcome.result is not None
     assert outcome.result.status is TriageStatus.no_change
-    assert "server-triage-discuss" in outcome.result.tags
+    assert outcome.result.tags == ["desktop-discuss"]
     assert "Null pointer." in outcome.result.analysis
+    assert "`desktop-discuss`" in provider.specs[0].system_prompt
+
+    # Without lp_discuss_tag, the fallback leaves tags empty rather than inventing one.
+    provider_no_tag = FakeProvider(
+        [
+            _session("submit_validation", BUG),
+            _session("submit_analysis", ANALYSIS),
+            [FakeTurn(text="no"), FakeTurn(text="no")],
+        ]
+    )
+    no_discuss = TeamConfig(lp_team="ubuntu-desktop", lp_todo_tag="desktop-todo")
+    outcome_no_tag = await _pipeline(provider_no_tag, team_config=no_discuss).triage(_payload())
+    assert outcome_no_tag.result is not None
+    assert outcome_no_tag.result.tags == []
 
 
 @pytest.mark.asyncio

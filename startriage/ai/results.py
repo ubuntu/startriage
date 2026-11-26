@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from typing import Any
 
 from ..analysis import (
@@ -65,20 +66,34 @@ def from_verdict(payload: dict[str, Any], pre: Precheck, v: ValidateResult) -> A
     )
 
 
+@dataclass(frozen=True)
+class PhaseOutputs:
+    """What the post-validation phases produced for one bug."""
+
+    assessment: Assessment | None = None
+    regression: Regression = field(default_factory=lambda: Regression([]))
+    analysis: Analysis | None = None
+    fix: FixProposal | None = None
+    fix_applies: dict[str, PatchCheck] = field(default_factory=dict)
+    context: PackageContext | None = None
+
+
 def from_phases(
     payload: dict[str, Any],
     pre: Precheck,
     v: ValidateResult,
     report: Report | None,
+    outputs: PhaseOutputs,
     *,
-    assessment: Assessment | None,
-    regression: Regression,
-    analysis: Analysis | None,
-    fix: FixProposal | None,
-    fix_applies: dict[str, PatchCheck],
-    context: PackageContext | None = None,
+    discuss_tag: str | None = None,
 ) -> AgentResult:
     """The report, with the fix and how it applies; or, if write-report failed, what the phases found."""
+    assessment = outputs.assessment
+    regression = outputs.regression
+    analysis = outputs.analysis
+    fix = outputs.fix
+    fix_applies = outputs.fix_applies
+    context = outputs.context
     resolved_package = (context.package if context else "") or pre.package
     upstream = context.upstream if context else None
     fix_checks = {
@@ -141,7 +156,7 @@ def from_phases(
         | {
             "status": TriageStatus.no_change,
             "importance": v.importance,
-            "tags": ["server-triage-discuss"],
+            "tags": [discuss_tag] if discuss_tag else [],
             "duplicate_of": assessment.duplicate_of if assessment else "",
             "analysis": "\n\n".join(p for p in parts if p),
             "references": fix_references,
@@ -163,9 +178,10 @@ _TERMINAL_STATUSES = frozenset(
 )
 
 
-def derive_actions(result: AgentResult) -> list[RecommendedAction]:
+def derive_actions(result: AgentResult, *, discuss_tag: str | None = None) -> list[RecommendedAction]:
     """Derive host-typed recommended actions from a verified :class:`AgentResult`."""
     actions: list[RecommendedAction] = []
+    has_discuss_tag = bool(discuss_tag and discuss_tag in result.tags)
 
     update_params: dict[str, Any] = {}
     if result.status is not TriageStatus.no_change:
@@ -195,7 +211,7 @@ def derive_actions(result: AgentResult) -> list[RecommendedAction]:
         label = "Update bug: " + " · ".join(parts) if parts else "Update bug"
         readiness = (
             ActionReadiness.needs_review
-            if "server-triage-discuss" in result.tags
+            if has_discuss_tag
             else ActionReadiness.ready
             if result.status in (TriageStatus.duplicate, TriageStatus.fix_released)
             else ActionReadiness.needs_review
@@ -229,22 +245,13 @@ def derive_actions(result: AgentResult) -> list[RecommendedAction]:
         )
 
     if not actions:
-        if "server-triage-discuss" in result.tags:
-            actions.append(
-                RecommendedAction(
-                    kind=ActionKind.discuss,
-                    label="Discuss in team triage",
-                    readiness=ActionReadiness.info_only,
-                )
+        actions.append(
+            RecommendedAction(
+                kind=ActionKind.none,
+                label="No action needed",
+                readiness=ActionReadiness.info_only,
             )
-        else:
-            actions.append(
-                RecommendedAction(
-                    kind=ActionKind.none,
-                    label="No action needed",
-                    readiness=ActionReadiness.info_only,
-                )
-            )
+        )
 
     return actions
 
@@ -331,7 +338,12 @@ def _derive_fix_action(result: AgentResult) -> RecommendedAction | None:
     )
 
 
-def to_item_analysis(outcome: BugOutcome, item: WorkItem | None = None) -> ItemAnalysis:
+def to_item_analysis(
+    outcome: BugOutcome,
+    item: WorkItem | None = None,
+    *,
+    discuss_tag: str | None = None,
+) -> ItemAnalysis:
     """Convert a pipeline :class:`BugOutcome` (+ optional :class:`WorkItem`) into :class:`ItemAnalysis`."""
     source = item.source if item else "launchpad"
     key = item.key if item else outcome.bug
@@ -383,7 +395,7 @@ def to_item_analysis(outcome: BugOutcome, item: WorkItem | None = None) -> ItemA
             upstream_suggestion=r.upstream_suggestion,
             references=list(r.references),
             phases=phases,
-            actions=derive_actions(r),
+            actions=derive_actions(r, discuss_tag=discuss_tag),
         )
 
     if outcome.error is not None:

@@ -222,6 +222,7 @@ savebugs_dir = "~/your-path-to-persisting-bug-progress"
 [team.ubuntu-server]
 lp_team = "ubuntu-server"
 lp_todo_tag = "server-todo"
+lp_discuss_tag = "server-triage-discuss"
 lp_ignore_packages = ["linux", "linux-meta"]
 discourse_categories = ["project/server"]
 discourse_triage_categories = ["project/server/server-triage"]  # suppress triage-post main entries; show replies only

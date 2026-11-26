@@ -29,6 +29,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from ..config import TeamConfig
 from . import archive, results
 from .agent import BugOutcome, PhaseOptions, run_phase
 from .checks import HostChecks, URLChecker, bitesize, describe
@@ -163,6 +164,7 @@ class Pipeline:
     lp: Any = None
     http: ReadOnlyHTTP | None = None
     team: frozenset[str] = frozenset()
+    team_config: TeamConfig | None = None
     window: Window | None = None
     urls: URLChecker = field(default_factory=lambda: URLChecker(None))
     feedback: bool = False
@@ -210,7 +212,7 @@ class Pipeline:
             self.provider,
             phase=phase,
             bug=outcome.bug,
-            system_prompt=system_prompt(phase, packages),
+            system_prompt=system_prompt(phase, packages, team=self.team_config),
             task=task,
             tools=[self.tools[name] for name in skill.tools if name in self.tools],
             submission=submission,
@@ -548,12 +550,15 @@ class Pipeline:
             bug.pre,
             bug.v,
             report,
-            assessment=bug.assessment,
-            regression=bug.regression,
-            analysis=bug.analysis,
-            fix=fix,
-            fix_applies=bug.fix_applies,
-            context=bug.context,
+            results.PhaseOutputs(
+                assessment=bug.assessment,
+                regression=bug.regression,
+                analysis=bug.analysis,
+                fix=fix,
+                fix_applies=bug.fix_applies,
+                context=bug.context,
+            ),
+            discuss_tag=self.team_config.lp_discuss_tag if self.team_config else None,
         )
 
     def _record_feedback(self, outcome: BugOutcome) -> None:

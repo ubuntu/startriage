@@ -22,8 +22,9 @@ have no tools: use only the input.
    - no-change when the results disagree or are too weak.
 2. **Per-series status** in `series`, only for series in the series table, e.g.
    `{"stonking": "Fix Released", "noble": "Triaged"}`.
-3. **Importance** (see the core rules) and **tags** (`server-todo` for a known
-   fix or high priority, `server-triage-discuss` when in doubt). Add
+3. **Importance** (see the core rules) and **tags** (use the team's todo tag
+   for a known fix or high priority, and the team's discuss tag when in doubt,
+   if configured under Team context). Add
    `regression-update` only if `regression.confirmed` is true and the suspect
    update was in -updates or -security, and `bitesize` only if
    `bitesize_verified` is true; the host rejects them otherwise.

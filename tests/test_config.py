@@ -30,6 +30,7 @@ def test_load_defaults_only(tmp_path):
     team = config.team["ubuntu-server"]
     assert team.lp_team == "ubuntu-server"
     assert team.lp_todo_tag == "server-todo"
+    assert team.lp_discuss_tag == "server-triage-discuss"
     assert "cloud-init" in team.lp_ignore_packages
 
 
@@ -103,6 +104,7 @@ def test_custom_team_added(tmp_path):
     )
     config = load_config(p)
     assert "ubuntu-desktop" in config.team
+    assert config.team["ubuntu-desktop"].lp_discuss_tag is None
     assert "ubuntu-server" in config.team  # defaults still present
 
 

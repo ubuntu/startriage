@@ -11,6 +11,7 @@ from startriage.ai.checks import URLChecker, check_bug_ref, check_series
 from startriage.ai.skills import CORE, PHASES, load_package_notes, load_skill, system_prompt
 from startriage.ai.tools import REGISTRY, ReadOnlyHTTP, ToolError
 from startriage.ai.tools.http import NetworkError
+from startriage.config import TeamConfig
 
 # --- skills -----------------------------------------------------------------
 
@@ -39,6 +40,22 @@ def test_system_prompt_adds_package_notes_only_to_their_phase():
     assert validate.startswith(load_skill(CORE).body)
     assert validate.count("## Notes for libvirt") == 1
     assert "## Notes for libvirt" not in system_prompt("write-report", ["libvirt"])
+
+
+def test_system_prompt_includes_team_context_and_omits_unset_discuss_tag():
+    team = TeamConfig(lp_team="ubuntu-desktop", lp_todo_tag="desktop-todo", lp_discuss_tag="desktop-discuss")
+    prompt = system_prompt("write-report", [], team=team)
+    assert "`ubuntu-desktop`" in prompt
+    assert "`desktop-todo`" in prompt
+    assert "`desktop-discuss`" in prompt
+    assert "server-triage-discuss" not in prompt
+    assert "server-todo" not in prompt
+
+    no_discuss = TeamConfig(lp_team="ubuntu-foundations", lp_todo_tag="foundations-todo")
+    prompt_no_discuss = system_prompt("write-report", [], team=no_discuss)
+    assert "`ubuntu-foundations`" in prompt_no_discuss
+    assert "`foundations-todo`" in prompt_no_discuss
+    assert "Discuss tag" not in prompt_no_discuss
 
 
 # --- checks -----------------------------------------------------------------

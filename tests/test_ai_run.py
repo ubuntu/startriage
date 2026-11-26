@@ -5,7 +5,7 @@ from __future__ import annotations
 import io
 import json
 from datetime import datetime, timezone
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
@@ -15,6 +15,7 @@ from startriage.ai import (
     FakeTurn,
     ProposedFix,
     RunOptions,
+    analyze_bug_specs,
     analyze_work_items,
     parse_bug_number,
     payloads_from_tasks,
@@ -25,7 +26,7 @@ from startriage.ai.contract import Importance, ProposedFixKind, SRUCandidate, Tr
 from startriage.ai.results import derive_actions
 from startriage.analysis import ActionKind, ActionReadiness, CodeLocationInfo, FixCheckInfo
 from startriage.cli import _build_parser
-from startriage.config import AIConfig, StarTriageConfig, load_config
+from startriage.config import AIConfig, StarTriageConfig, TeamConfig, load_config
 from startriage.output import OutputConfig, OutputFormat
 from startriage.report import emit_triage_outputs
 from startriage.sources.github.models import Issue, RepoResult
@@ -149,6 +150,64 @@ async def test_run_agent_on_payloads_uses_chosen_tools():
     assert "lp_get_attachment" not in report
 
 
+@pytest.mark.asyncio
+async def test_analyze_bug_specs_threads_selected_team(monkeypatch):
+    from startriage.ai import run as ai_run_module
+
+    monkeypatch.setattr(
+        ai_run_module,
+        "gather_user_bug_payloads",
+        lambda lp, specs: [{"number": "123", "package": "pkg", "title": "boom"}],
+    )
+    seen_lp_teams: list[str] = []
+
+    def fake_members(lp, lp_team):
+        seen_lp_teams.append(lp_team)
+        return frozenset({lp_team})
+
+    monkeypatch.setattr(ai_run_module, "team_members", fake_members)
+
+    config = StarTriageConfig(
+        team={
+            "ubuntu-server": TeamConfig(
+                lp_team="ubuntu-server",
+                lp_todo_tag="server-todo",
+                lp_discuss_tag="server-triage-discuss",
+            ),
+            "desktop": TeamConfig(
+                lp_team="ubuntu-desktop",
+                lp_todo_tag="desktop-todo",
+                lp_discuss_tag="desktop-discuss",
+            ),
+        }
+    )
+    provider = FakeProvider([_CANNED])
+    batch = await analyze_bug_specs(
+        config,
+        cast(Any, None),
+        ["123"],
+        team_name="desktop",
+        provider=provider,
+        options=RunOptions(progress_stream=io.StringIO(), progress_tty=False),
+    )
+    assert batch is not None
+    assert seen_lp_teams == ["ubuntu-desktop"]
+    prompt = provider.specs[0].system_prompt
+    assert "`ubuntu-desktop`" in prompt
+    assert "`desktop-todo`" in prompt
+    assert "`desktop-discuss`" in prompt
+    assert "server-triage-discuss" not in prompt
+
+    with pytest.raises(KeyError, match="no-such-team"):
+        await analyze_bug_specs(
+            config,
+            cast(Any, None),
+            ["123"],
+            team_name="no-such-team",
+            provider=FakeProvider([]),
+        )
+
+
 # --- CLI parser wiring -----------------------------------------------------
 
 
@@ -259,6 +318,17 @@ def test_derive_actions_produces_multi_action_list_with_readiness():
     # Unmerged upstream fix drops readiness to needs_review.
     unmerged = result.model_copy(update={"fix_unmerged": True})
     assert derive_actions(unmerged)[1].readiness is ActionReadiness.needs_review
+
+    # Configured discuss_tag downgrades a ready tracker_update (e.g. Duplicate) to needs_review.
+    dup = AgentResult(bug="202", package="nginx", status=TriageStatus.duplicate, duplicate_of="42")
+    assert derive_actions(dup, discuss_tag="desktop-discuss")[0].readiness is ActionReadiness.ready
+    dup_discuss = dup.model_copy(update={"tags": ["desktop-discuss"]})
+    assert (
+        derive_actions(dup_discuss, discuss_tag="desktop-discuss")[0].readiness
+        is ActionReadiness.needs_review
+    )
+    # Without a matching discuss_tag, another team's tag does not suppress readiness.
+    assert derive_actions(dup_discuss, discuss_tag="other-discuss")[0].readiness is ActionReadiness.ready
 
     # Review-update "no action" yields a single none action.
     noop = AgentResult(bug="201", package="nginx", status=TriageStatus.no_change)

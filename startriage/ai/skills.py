@@ -21,6 +21,7 @@ from typing import Any
 
 import yaml
 
+from ..config import TeamConfig
 from .supervisor import MAX_CALLS
 
 CORE = "triage-core"
@@ -107,9 +108,25 @@ def load_package_notes(package: str) -> PackageNotes | None:
     return PackageNotes(package=package, also_search=tuple(meta.get("also_search") or ()), sections=sections)
 
 
-def system_prompt(phase: str, packages: list[str]) -> str:
-    """The system prompt of ``phase``: the core rules, the phase skill and package notes."""
-    parts = [load_skill(CORE).body, load_skill(phase).body]
+def _team_context(team: TeamConfig) -> str:
+    """Team-specific context appended to the core rules."""
+    lines = ["# Team context", f"- Launchpad team: `{team.lp_team}`"]
+    if team.lp_todo_tag:
+        lines.append(
+            f"- Todo tag `{team.lp_todo_tag}`: a known fix or a high priority; "
+            "the team should work on it soon."
+        )
+    if team.lp_discuss_tag:
+        lines.append(f"- Discuss tag `{team.lp_discuss_tag}`: ambiguous; the team should discuss it.")
+    return "\n".join(lines)
+
+
+def system_prompt(phase: str, packages: list[str], *, team: TeamConfig | None = None) -> str:
+    """The system prompt of ``phase``: the core rules, team context, the phase skill and package notes."""
+    parts = [load_skill(CORE).body]
+    if team is not None:
+        parts.append(_team_context(team))
+    parts.append(load_skill(phase).body)
     for package in dict.fromkeys(packages):
         notes = load_package_notes(package) if package else None
         if notes and phase in notes.sections:

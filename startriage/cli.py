@@ -538,6 +538,7 @@ async def _run_analyze(args: argparse.Namespace, config: StarTriageConfig) -> No
         config,
         lp,
         args.bug,
+        team_name=args.team,
         provider=provider,
         options=RunOptions(
             keep_workdir=args.ai_keep_workdir,

@@ -190,6 +190,7 @@ class TeamConfig(BaseModel):
 
     lp_team: str
     lp_todo_tag: str
+    lp_discuss_tag: str | None = None
     lp_freezer_tag: str | None = None
     lp_ignore_packages: list[str] = []
     discourse_categories: list[str] = []

@@ -29,7 +29,7 @@ import aiohttp
 import platformdirs
 
 from ..analysis import AIRun, ItemAnalysis, ItemSnapshot, PhaseCost, WorkItem
-from ..config import StarTriageConfig, resolve_team_name
+from ..config import StarTriageConfig, TeamConfig, resolve_team_name
 from .agent import BugOutcome
 from .checks import URLChecker
 from .feedback import default_feedback_log
@@ -217,6 +217,7 @@ async def analyze_work_items(
     lp: Launchpad | None = None,
     provider: Provider | None = None,
     team: frozenset[str] = frozenset(),
+    team_config: TeamConfig | None = None,
     window: Window | None = None,
     options: RunOptions | None = None,
 ) -> AITriageBatch | None:
@@ -262,6 +263,7 @@ async def analyze_work_items(
                 lp=lp,
                 http=http,
                 team=team,
+                team_config=team_config,
                 window=window,
                 urls=URLChecker(http if "verify_url" in tool_names else None),
                 feedback=config.ai.suggest_improvements,
@@ -273,12 +275,13 @@ async def analyze_work_items(
                 on_phase_done=progress.on_phase_done,
                 on_event=progress.on_event,
             )
+            discuss_tag = team_config.lp_discuss_tag if team_config else None
             total = len(items)
             for index, item in enumerate(items, start=1):
                 progress.on_item_start(index, total, item)
                 logger.info("Triaging bug %s (%d/%d)…", item.key, index, total)
                 outcome = await triage_one(pipeline, item.payload)
-                analysis = to_item_analysis(outcome, item)
+                analysis = to_item_analysis(outcome, item, discuss_tag=discuss_tag)
                 progress.on_item_done(index, total, analysis)
                 outcomes.append(outcome)
                 analyses.append(analysis)
@@ -303,6 +306,7 @@ async def run_agent_on_payloads(
     lp: Launchpad | None = None,
     provider: Provider | None = None,
     team: frozenset[str] = frozenset(),
+    team_config: TeamConfig | None = None,
     window: Window | None = None,
     keep_workdir: bool = False,
     verbose: bool = False,
@@ -316,6 +320,7 @@ async def run_agent_on_payloads(
         lp=lp,
         provider=provider,
         team=team,
+        team_config=team_config,
         window=window,
         options=RunOptions(keep_workdir=keep_workdir, verbose=verbose, show_thinking=show_thinking),
     )
@@ -327,22 +332,35 @@ async def analyze_bug_specs(
     lp: Launchpad,
     bug_specs: list[str],
     *,
+    team_name: str | None = None,
     provider: Provider | None = None,
     options: RunOptions | None = None,
 ) -> AITriageBatch | None:
     """Resolve user-supplied bug specs into WorkItems and run AI analysis."""
+    team_config: TeamConfig | None = None
+    team: frozenset[str] = frozenset()
+    if team_name is not None:
+        team_config = config.get_team(team_name)
+    else:
+        try:
+            team_config = config.get_team(resolve_team_name(None, config))
+        except KeyError:
+            logger.info("No default team: no activity counts as the team's")
     payloads = await asyncio.to_thread(gather_user_bug_payloads, lp, bug_specs)
     if not payloads:
         return None
-    team: frozenset[str] = frozenset()
-    try:
-        lp_team = config.get_team(resolve_team_name(None, config)).lp_team
-    except KeyError:
-        logger.info("No default team: no activity counts as the team's")
-    else:
-        team = await asyncio.to_thread(team_members, lp, lp_team)
+    if team_config is not None:
+        team = await asyncio.to_thread(team_members, lp, team_config.lp_team)
     items = [work_item_from_payload(p) for p in payloads]
-    return await analyze_work_items(config, items, lp=lp, provider=provider, team=team, options=options)
+    return await analyze_work_items(
+        config,
+        items,
+        lp=lp,
+        provider=provider,
+        team=team,
+        team_config=team_config,
+        options=options,
+    )
 
 
 async def run_ai_over_bug_specs(
@@ -350,6 +368,7 @@ async def run_ai_over_bug_specs(
     lp: Launchpad,
     bug_specs: list[str],
     *,
+    team_name: str | None = None,
     provider: Provider | None = None,
     keep_workdir: bool = False,
     verbose: bool = False,
@@ -365,6 +384,7 @@ async def run_ai_over_bug_specs(
         config,
         lp,
         bug_specs,
+        team_name=team_name,
         provider=provider,
         options=RunOptions(keep_workdir=keep_workdir, verbose=verbose, show_thinking=show_thinking),
     )
@@ -409,6 +429,7 @@ async def analyze_triage_results(
         lp=lp,
         provider=provider,
         team=team,
+        team_config=result.team_config,
         window=window,
         options=options,
     )
