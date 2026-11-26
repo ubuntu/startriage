@@ -20,6 +20,7 @@ import logging
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +32,24 @@ logger = logging.getLogger(__name__)
 
 # Upper bound for one model turn (task or nudge), tool calls included.
 TURN_TIMEOUT = 900
+
+
+class SessionEventKind(StrEnum):
+    tool_start = "tool_start"
+    reasoning_delta = "reasoning_delta"
+    reasoning = "reasoning"
+    intent = "intent"
+    nudge = "nudge"
+
+
+@dataclass(frozen=True)
+class SessionEvent:
+    """Live progress event emitted during one agent session."""
+
+    kind: SessionEventKind
+    text: str = ""
+    tool_name: str = ""
+    tool_args: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -46,6 +65,8 @@ class SessionSpec:
     # Sent once if the first turn ends while ``is_done()`` is still false.
     nudge: str | None = None
     is_done: Callable[[], bool] = lambda: True
+    streaming: bool = False
+    on_event: Callable[[SessionEvent], None] | None = None
 
 
 @dataclass
@@ -123,6 +144,8 @@ def session_options(spec: SessionSpec, ai_config: AIConfig) -> dict[str, Any]:
     }
     if spec.working_directory is not None:
         options["working_directory"] = str(spec.working_directory)
+    if spec.streaming:
+        options["streaming"] = True
     return options
 
 
@@ -154,10 +177,22 @@ class CopilotProvider(Provider):
         )
         aborted = asyncio.Event()
 
+        def emit(event: SessionEvent) -> None:
+            if spec.on_event is not None:
+                spec.on_event(event)
+
         def sdk_tool(tool: ToolSpec) -> Any:
             async def handler(invocation: Any) -> Any:
                 result.tool_calls.append(tool.name)
-                text, ok = await call_tool(tool, invocation.arguments or {})
+                args = invocation.arguments or {}
+                emit(
+                    SessionEvent(
+                        SessionEventKind.tool_start,
+                        tool_name=tool.name,
+                        tool_args=args if isinstance(args, dict) else {},
+                    )
+                )
+                text, ok = await call_tool(tool, args)
                 if ok:
                     return ToolResult(text_result_for_llm=text)
                 return ToolResult(text_result_for_llm=text, result_type="failure", error=text)
@@ -186,12 +221,34 @@ class CopilotProvider(Provider):
                 return None
             return {"permissionDecision": "deny", "permissionDecisionReason": reason}
 
+        saw_reasoning_delta = False
+
         def on_event(event: Any) -> None:
+            nonlocal saw_reasoning_delta
             etype = _event_type(event)
             logger.debug("Copilot session event: %s", etype)
             if etype == "assistant.usage":
                 result.input_tokens += getattr(event.data, "input_tokens", 0) or 0
                 result.output_tokens += getattr(event.data, "output_tokens", 0) or 0
+            elif etype == "assistant.reasoning_delta":
+                delta = getattr(event.data, "delta_content", "") or ""
+                if delta:
+                    saw_reasoning_delta = True
+                    emit(SessionEvent(SessionEventKind.reasoning_delta, text=delta))
+            elif etype == "assistant.reasoning":
+                content = getattr(event.data, "content", "") or ""
+                if content and not saw_reasoning_delta:
+                    emit(SessionEvent(SessionEventKind.reasoning, text=content))
+                saw_reasoning_delta = False
+            elif etype == "assistant.message":
+                reasoning_text = getattr(event.data, "reasoning_text", "") or ""
+                if reasoning_text and not saw_reasoning_delta:
+                    emit(SessionEvent(SessionEventKind.reasoning, text=reasoning_text))
+                saw_reasoning_delta = False
+            elif etype == "assistant.intent":
+                intent = getattr(event.data, "intent", "") or ""
+                if intent:
+                    emit(SessionEvent(SessionEventKind.intent, text=intent))
 
         def reject(_request: Any, _invocation: Any) -> Any:
             # Our tools skip permission; anything else asking is not allowed.
@@ -225,6 +282,7 @@ class CopilotProvider(Provider):
                 if not aborted.is_set() and spec.nudge and not spec.is_done():
                     logger.info("No result submitted, nudging the model once")
                     result.nudged = True
+                    emit(SessionEvent(SessionEventKind.nudge, text="nudging for submission"))
                     message = await send(session, spec.nudge)
                 result.text = (message.data.content or "") if message else ""
         result.aborted = aborted.is_set()
@@ -237,6 +295,7 @@ class FakeTurn:
 
     calls: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
     text: str = ""
+    reasoning: str = ""
     input_tokens: int = 0
     output_tokens: int = 0
 
@@ -269,12 +328,20 @@ class FakeProvider(Provider):
                 if not spec.nudge or spec.is_done():
                     break
                 result.nudged = True
+                if spec.on_event is not None:
+                    spec.on_event(SessionEvent(SessionEventKind.nudge, text="nudging for submission"))
             elif index > 1:
                 break
             result.input_tokens += turn.input_tokens
             result.output_tokens += turn.output_tokens
+            if turn.reasoning and spec.on_event is not None:
+                spec.on_event(SessionEvent(SessionEventKind.reasoning_delta, text=turn.reasoning))
             for name, args in turn.calls:
                 result.tool_calls.append(name)
+                if spec.on_event is not None:
+                    spec.on_event(
+                        SessionEvent(SessionEventKind.tool_start, tool_name=name, tool_args=dict(args))
+                    )
                 reason = supervisor.check(name, args)
                 if reason is not None:
                     self.calls.append((name, args, reason, False))

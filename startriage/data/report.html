@@ -117,7 +117,7 @@ tbody tr:nth-child(even) { background: var(--zebra); }
 tbody tr:hover { background: #fdf0eb; }
 tbody tr { cursor: text; }
 tbody a, tbody button { cursor: pointer; }
-th, td:not(:last-child) { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+th, td:nth-child(-n+8) { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 button.check {
   width: 1.5rem;
   height: 1.5rem;
@@ -161,11 +161,133 @@ textarea.comment {
 }
 textarea.comment:focus { outline: none; border-color: var(--orange); background: #fff; }
 button.add-comment { padding: 0 0.2rem; font-size: 0.8rem; }
+button.ai-toggle {
+  padding: 0 0.45rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  font-size: 0.75rem;
+  white-space: nowrap;
+  color: var(--aubergine);
+  background: #fff;
+}
+button.ai-toggle:hover, button.ai-toggle[aria-expanded=true] {
+  border-color: var(--aubergine);
+  background: #f9f2f6;
+}
+button.ai-toggle.ai-fix { border-color: #b7d9bd; color: var(--closed); }
+button.ai-toggle.ai-fix:hover, button.ai-toggle.ai-fix[aria-expanded=true] {
+  border-color: var(--closed);
+  background: #eef7f0;
+}
+button.ai-toggle.ai-muted { color: var(--muted); }
+button.ai-toggle.ai-failed { border-color: #e6b8be; color: var(--open); }
+td.ai-cell {
+  grid-column: 2 / -1;
+  padding: 0 0.5rem 0.65rem;
+  border-bottom: 1px solid var(--line);
+  cursor: default;
+}
+tr.ai-open td:not(.ai-cell) { border-bottom: 0; }
+.ai-panel {
+  border-left: 3px solid var(--aubergine);
+  background: #fafafa;
+  padding: 0.6rem 0.85rem;
+  border-radius: 0 var(--radius) var(--radius) 0;
+  font-size: 0.9rem;
+}
+.ai-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem 1rem;
+  align-items: center;
+  padding-bottom: 0.45rem;
+  border-bottom: 1px solid var(--line);
+  font-size: 0.85rem;
+}
+.ai-tags { display: inline-flex; gap: 0.3rem; align-items: center; flex-wrap: wrap; }
+.ai-muted { color: var(--muted); }
+.ai-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+  margin-top: 0.5rem;
+}
+.ai-action-list { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+.ai-action {
+  padding: 0.1rem 0.5rem;
+  border-radius: var(--radius);
+  font-size: 0.8rem;
+  border: 1px solid var(--line);
+  background: #fff;
+}
+.ai-action-ready { border-color: #8cc596; color: var(--closed); background: #f2faf3; }
+.ai-action-review { border-color: #d6b6c8; color: var(--aubergine); background: #fcf7fa; }
+.ai-action-info { color: var(--muted); }
+.ai-copy-task, .ai-copy-comment {
+  padding: 0.1rem 0.5rem;
+  border: var(--border);
+  border-radius: var(--radius);
+  background: #fff;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+.ai-copy-task:hover, .ai-copy-comment:hover { border-color: var(--orange); color: var(--orange); }
+.ai-body { margin-top: 0.5rem; }
+.ai-body p, .ai-block p { margin: 0.35rem 0; }
+.ai-body ul, .ai-block ul { margin: 0.25rem 0 0.25rem 1.2rem; padding: 0; }
+.ai-body code, .ai-block code {
+  font-family: "Ubuntu Mono", monospace;
+  font-size: 0.85em;
+  background: #efefef;
+  padding: 0.05rem 0.25rem;
+  border-radius: var(--radius);
+}
+.ai-body pre, pre.ai-diff {
+  margin: 0.35rem 0;
+  padding: 0.5rem 0.65rem;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow-x: auto;
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+.ai-body pre code, pre.ai-diff code { background: none; padding: 0; font-size: inherit; }
+.ai-heading { font-weight: 600; margin-top: 0.45rem; }
+.ai-block { margin-top: 0.6rem; }
+.ai-block-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--muted);
+  margin-bottom: 0.2rem;
+}
+blockquote.ai-comment {
+  margin: 0;
+  padding: 0.4rem 0.65rem;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--warm-grey);
+  white-space: pre-wrap;
+  font-size: 0.88rem;
+}
+details.ai-phases { margin-top: 0.6rem; font-size: 0.82rem; color: var(--muted); }
+details.ai-phases summary { display: inline-block; list-style: none; }
+details.ai-phases summary::before { content: "\25b8 "; }
+details.ai-phases[open] summary::before { content: "\25be "; }
+details.ai-phases summary:hover { color: var(--orange); }
+details.ai-phases ul { margin: 0.3rem 0 0 1.2rem; padding: 0; }
 .error { color: var(--open); }
 footer { padding: 1rem 1.5rem; color: var(--muted); font-size: 0.8rem; }
 @media print {
   header { position: static; }
-  .controls, .reveal, td:first-child { display: none; }
+  .controls, .reveal, td:first-child, .ai-copy-task, .ai-copy-comment { display: none; }
 }
 </style>
 </head>
@@ -175,6 +297,7 @@ footer { padding: 1rem 1.5rem; color: var(--muted); font-size: 0.8rem; }
   <span class="subtitle">$subtitle</span>
   <div class="controls">
     <span id="left"></span>
+    $ai_controls
     <button id="restore-last" class="btn" disabled>Restore last</button>
     <button id="restore-all" class="btn" disabled>Restore all</button>
     <details class="menu" title="Commented items as markdown report, e.g. for Discourse">
@@ -189,8 +312,8 @@ footer { padding: 1rem 1.5rem; color: var(--muted); font-size: 0.8rem; }
 <main>
 $body
 </main>
-<footer>Generated $generated by <a href="https://github.com/ubuntu/startriage">startriage</a></footer>
-<script>
+<footer>Generated $generated by <a href="https://github.com/ubuntu/startriage">startriage</a>$ai_footer</footer>
+$ai_data<script>
 (function () {
   "use strict";
   var PREFIX = "startriage:";
@@ -437,12 +560,89 @@ $body
     textarea.addEventListener("blur", function () {
       if (!textarea.value) show(false);
     });
-    // anywhere on the row but its links and buttons, unless selecting text
+    // anywhere on the row but its links, buttons, and AI drawer, unless selecting text
     row.addEventListener("click", function (event) {
-      if (event.target.closest("a, button.check, textarea")) return;
+      if (event.target.closest("a, button.check, button.ai-toggle, td.ai-cell, textarea")) return;
       if (String(window.getSelection())) return;
       show(true);
       textarea.focus();
+    });
+  });
+
+  var aiIndex = {};
+  try {
+    var aiEl = document.getElementById("ai-data");
+    var aiParsed = aiEl ? JSON.parse(aiEl.textContent || "null") : null;
+    if (aiParsed && Array.isArray(aiParsed.items)) {
+      aiParsed.items.forEach(function (item) {
+        aiIndex[item.source + "-" + item.key] = {
+          schema_version: aiParsed.schema_version || 1,
+          item: item
+        };
+      });
+    }
+  } catch (e) {
+    // ignore malformed embedded data
+  }
+
+  function setAiOpen(row, open) {
+    var cell = row.querySelector("td.ai-cell");
+    var toggle = row.querySelector("button.ai-toggle");
+    if (!cell || !toggle) return;
+    cell.hidden = !open;
+    row.classList.toggle("ai-open", open);
+    toggle.setAttribute("aria-expanded", open ? "true" : "false");
+  }
+
+  var toggleAllAi = document.getElementById("toggle-all-ai");
+  function syncToggleAllAi() {
+    if (!toggleAllAi) return;
+    var rows = Array.from(document.querySelectorAll("tbody tr:not([hidden])")).filter(function (r) {
+      return !!r.querySelector("td.ai-cell");
+    });
+    var anyClosed = rows.some(function (r) { return r.querySelector("td.ai-cell").hidden; });
+    toggleAllAi.textContent = anyClosed ? "Expand AI" : "Collapse AI";
+  }
+
+  document.querySelectorAll("button.ai-toggle").forEach(function (button) {
+    button.addEventListener("click", function (event) {
+      event.stopPropagation();
+      var row = button.closest("tr");
+      var cell = row.querySelector("td.ai-cell");
+      setAiOpen(row, cell.hidden);
+      syncToggleAllAi();
+    });
+  });
+
+  if (toggleAllAi) {
+    toggleAllAi.addEventListener("click", function () {
+      var open = toggleAllAi.textContent === "Expand AI";
+      document.querySelectorAll("tbody tr").forEach(function (row) {
+        if (row.querySelector("td.ai-cell")) setAiOpen(row, open);
+      });
+      syncToggleAllAi();
+    });
+  }
+
+  document.querySelectorAll("button.ai-copy-comment").forEach(function (button) {
+    button.addEventListener("click", function () {
+      var text = button.closest(".ai-block").querySelector("blockquote.ai-comment").textContent;
+      navigator.clipboard.writeText(text).then(
+        function () { flash(button, "Copied"); },
+        function () { flash(button, "Copy failed"); }
+      );
+    });
+  });
+
+  document.querySelectorAll("button.ai-copy-task").forEach(function (button) {
+    button.addEventListener("click", function () {
+      var row = button.closest("tr");
+      var payload = aiIndex[row.id];
+      if (!payload) return;
+      navigator.clipboard.writeText(JSON.stringify(payload, null, 2)).then(
+        function () { flash(button, "Copied"); },
+        function () { flash(button, "Copy failed"); }
+      );
     });
   });
 
@@ -453,6 +653,7 @@ $body
     }
   });
   update();
+  syncToggleAllAi();
 })();
 </script>
 </body>

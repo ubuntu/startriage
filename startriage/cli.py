@@ -18,7 +18,7 @@ from .config import (
 )
 from .log import log_setup
 from .output import OutputConfig, OutputFormat
-from .report import print_fetch_errors, todo, triage
+from .report import emit_triage_outputs, gather_triage, print_fetch_errors, todo
 from .savebugs import BugPersistor, SaveConfig
 from .source import TaskFilterOptions
 from .sources.github.auth import github_device_flow_login
@@ -44,9 +44,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--config",
         metavar="PATH",
         type=Path,
-        help=(
-            f"Path to config TOML (default: {DEFAULT_USER_CONFIG})"
-        ),
+        help=(f"Path to config TOML (default: {DEFAULT_USER_CONFIG})"),
     )
     parser.add_argument(
         "-v", "--verbose", action="count", default=0, help="Increase logging verbosity (repeatable)"
@@ -142,6 +140,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--ai-keep-workdir",
         action="store_true",
         help="Keep the AI agent's scratch directory (fetched sources, session files) and print its path",
+    )
+    ai_p.add_argument(
+        "--ai-show-thinking",
+        action="store_true",
+        help="Stream the AI agent's thinking and tool steps to the terminal while analyzing",
     )
 
     list_p = argparse.ArgumentParser(
@@ -426,19 +429,40 @@ async def _run_triage(args: argparse.Namespace, config: StarTriageConfig) -> Non
         general = general.model_copy(update={"proposed_min_age": args.proposed_min_age})
     config.general = general
 
-    results = await triage(config, filter, output_cfg)
+    # Stage 1: gather sources and stream terminal output.
+    results = await gather_triage(config, filter, output_cfg)
 
     if print_fetch_errors(results):
         sys.exit(1)
 
+    # Stage 2: optional per-item AI analysis (live progress on stderr).
+    ai_run = None
+    ai_markdown = None
     if args.ai:
-        from .ai import emit_ai_report, run_ai_over_triage_results
+        from .ai import RunOptions, analyze_triage_results
 
-        report = await run_ai_over_triage_results(
-            config, results, provider=provider, keep_workdir=args.ai_keep_workdir
+        batch = await analyze_triage_results(
+            config,
+            results,
+            provider=provider,
+            options=RunOptions(
+                keep_workdir=args.ai_keep_workdir,
+                verbose=args.verbose > 0,
+                show_thinking=args.ai_show_thinking,
+            ),
         )
-        if report is not None:
-            emit_ai_report(report, output_cfg.markdown_path)
+        if batch is not None:
+            ai_run = batch.run
+            ai_markdown = batch.to_markdown()
+
+    # Stage 3: emit requested outputs (markdown, html, json, or stdout AI report).
+    await emit_triage_outputs(
+        results,
+        filter,
+        output_cfg,
+        ai_run=ai_run,
+        ai_markdown=ai_markdown,
+    )
 
 
 async def _run_todo(args: argparse.Namespace, config: StarTriageConfig) -> None:
@@ -501,7 +525,13 @@ async def _run_analyze(args: argparse.Namespace, config: StarTriageConfig) -> No
     resolve_tools(config, args.config)
     lp = await asyncio.to_thread(connect_launchpad, config.general.lp_credentials_file)
     report = await run_ai_over_bug_specs(
-        config, lp, args.bug, provider=provider, keep_workdir=args.ai_keep_workdir
+        config,
+        lp,
+        args.bug,
+        provider=provider,
+        keep_workdir=args.ai_keep_workdir,
+        verbose=args.verbose > 0,
+        show_thinking=args.ai_show_thinking,
     )
     if report is None:
         print("No valid bugs to triage.", file=sys.stderr)

@@ -8,7 +8,9 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
+
+from ..analysis import CodeLocationInfo, FixCheckInfo, RegressionInfo
 
 
 class TriageStatus(StrEnum):
@@ -75,6 +77,12 @@ class AgentResult(BaseModel):
     proposed_fix: ProposedFix = ProposedFix(kind=ProposedFixKind.none)
     # How the proposed fix applies per series, as the host checked it ("clean", "fails", ...).
     fix_applies: dict[str, str] = {}
+    fix_checks: dict[str, FixCheckInfo] = Field(default_factory=dict)
+    fix_unmerged: bool = False
+    bitesize_verified: bool = False
+    locations: list[CodeLocationInfo] = Field(default_factory=list)
+    regression: RegressionInfo | None = None
+    upstream_url: str = ""
     references: list[str] = []
     sru_candidates: list[SRUCandidate] = []
     upstream_suggestion: str = ""

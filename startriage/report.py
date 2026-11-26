@@ -10,6 +10,7 @@ import traceback
 from collections.abc import Mapping
 from datetime import date, time
 
+from .analysis import AIRun
 from .config import StarTriageConfig
 from .dates import compact_date_range, last_day, reverse_triage_task_day
 from .htmlreport import write_report
@@ -22,39 +23,42 @@ from .triage import fetch
 _MARKDOWN_SOURCES = ("launchpad", "github", "discourse", "proposed")
 
 
-async def triage(
-    config: StarTriageConfig,
-    opts: TaskFilterOptions,
-    output_cfg: OutputConfig,
-) -> dict[str, TriageResult]:
-    """Daily triage: fetch all sources concurrently, print sections in order as they complete.
-
-    Returns the results so callers (e.g. ``triage --ai``) can reuse them without re-fetching.
-    """
-
-    range = range_verbose = triage_task_note = ""
-
-    # show date range once before any section output
+def _triage_range_labels(opts: TaskFilterOptions) -> tuple[str, str, str]:
+    """Return ``(compact_range, range_verbose, triage_task_note)`` for ``opts``."""
+    range_str = range_verbose = triage_task_note = ""
     if opts.start and opts.end:
         first, last = opts.start.date(), last_day(opts.end)
         if opts.start.time() == time.min and opts.end.time() == time.min:
-            range = f" {compact_date_range(first, last)}"
+            range_str = f" {compact_date_range(first, last)}"
             first_str, last_str = (d.strftime("%Y-%m-%d (%A)") for d in (first, last))
             if first == last:
                 range_verbose = f"on {first_str}"
             else:
                 range_verbose = f"between {first_str} and {last_str} inclusive"
         else:
-            range = f" {opts.start.isoformat()}->{opts.end.isoformat()}"
+            range_str = f" {opts.start.isoformat()}->{opts.end.isoformat()}"
             range_verbose = f"from {opts.start.isoformat()} until {opts.end.isoformat()}"
 
         triage_task_name = reverse_triage_task_day(first, last)
-
         if triage_task_name:
             triage_task_note = f' ("{triage_task_name}")'
+    return range_str, range_verbose, triage_task_note
+
+
+async def gather_triage(
+    config: StarTriageConfig,
+    opts: TaskFilterOptions,
+    output_cfg: OutputConfig,
+) -> dict[str, TriageResult]:
+    """Stage 1 of daily triage: fetch all sources concurrently and stream terminal/markdown output.
+
+    Does not emit ``--format json`` or ``--markdown``/``--html`` report files;
+    call :func:`emit_triage_outputs` once any optional AI analysis has completed.
+    """
+    range_str, range_verbose, triage_task_note = _triage_range_labels(opts)
 
     if output_cfg.fmt == OutputFormat.TERMINAL:
-        print(f"Triage{range} for team {opts.team!r}", file=output_cfg.out)
+        print(f"Triage{range_str} for team {opts.team!r}", file=output_cfg.out)
 
     if range_verbose:
         match output_cfg.fmt:
@@ -68,13 +72,35 @@ async def triage(
             case _:
                 raise NotImplementedError
 
-    results = await _fetch_and_render(config, opts, FetchMode.triage, output_cfg)
+    return await _fetch_and_render(config, opts, FetchMode.triage, output_cfg, emit_json=False)
+
+
+async def emit_triage_outputs(
+    results: Mapping[str, TriageResult],
+    opts: TaskFilterOptions,
+    output_cfg: OutputConfig,
+    *,
+    ai_run: AIRun | None = None,
+    ai_markdown: str | None = None,
+) -> None:
+    """Stage 3 of daily triage: write JSON, markdown, and HTML outputs (including AI if run)."""
+    range_str, range_verbose, _ = _triage_range_labels(opts)
+
+    if output_cfg.fmt == OutputFormat.JSON:
+        data: dict[str, object] = {source: await result.to_dict() for source, result in results.items()}
+        if ai_run is not None:
+            data["ai"] = ai_run.to_dict()
+        json.dump(data, output_cfg.out, indent=2, default=json_default)
+        print(file=output_cfg.out)
 
     if output_cfg.markdown_path or output_cfg.html_path:
-        markdown = await _triage_markdown(results, range)
+        markdown = await _triage_markdown(results, range_str)
 
         if output_cfg.markdown_path:
-            output_cfg.markdown_path.write_text(markdown, encoding="utf-8")
+            full_md = markdown
+            if ai_markdown:
+                full_md = markdown + "\n\n" + ai_markdown
+            output_cfg.markdown_path.write_text(full_md, encoding="utf-8")
             logging.info("Markdown written to %s", output_cfg.markdown_path)
 
         if output_cfg.html_path:
@@ -85,13 +111,32 @@ async def triage(
                 output_cfg.html_path,
                 results,
                 FetchMode.triage,
-                f"Triage{range}",
+                f"Triage{range_str}",
                 subtitle,
                 markdown=markdown,
                 filename=filename,
+                ai_run=ai_run,
             )
             logging.info("HTML written to %s", output_cfg.html_path)
 
+    # When AI ran without a file target (or JSON format), print the AI markdown to stdout.
+    if (
+        ai_markdown
+        and output_cfg.fmt != OutputFormat.JSON
+        and output_cfg.markdown_path is None
+        and output_cfg.html_path is None
+    ):
+        print("\n" + ai_markdown, file=output_cfg.out)
+
+
+async def triage(
+    config: StarTriageConfig,
+    opts: TaskFilterOptions,
+    output_cfg: OutputConfig,
+) -> dict[str, TriageResult]:
+    """Daily triage: gather all sources and emit all configured outputs."""
+    results = await gather_triage(config, opts, output_cfg)
+    await emit_triage_outputs(results, opts, output_cfg)
     return results
 
 
@@ -173,10 +218,13 @@ async def _fetch_and_render(
     opts: TaskFilterOptions,
     mode: FetchMode,
     output_cfg: OutputConfig,
+    *,
+    emit_json: bool = True,
 ) -> dict[str, TriageResult]:
     """Fetch and render sections as they complete, so we don't wait for the slowest source.
 
-    JSON can't be streamed per section, so it is written once all sources are done.
+    JSON can't be streamed per section, so it is written once all sources are done
+    (unless ``emit_json=False``, when the caller emits JSON later).
     Reporting of fetch errors is left to the caller; see ``print_fetch_errors``.
     """
     async with Spinner({s.name for s in opts.sources}) as spinner:
@@ -200,7 +248,7 @@ async def _fetch_and_render(
 
         results = await fetch(config, opts, mode, on_result=render)
 
-    if output_cfg.fmt == OutputFormat.JSON:
+    if emit_json and output_cfg.fmt == OutputFormat.JSON:
         data = {source: await result.to_dict() for source, result in results.items()}
         json.dump(data, output_cfg.out, indent=2, default=json_default)
         print(file=output_cfg.out)

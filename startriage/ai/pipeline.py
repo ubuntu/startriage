@@ -30,7 +30,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from . import archive, results
-from .agent import BugOutcome, run_phase
+from .agent import BugOutcome, PhaseOptions, run_phase
 from .checks import HostChecks, URLChecker, bitesize, describe
 from .contract import ProposedFixKind
 from .feedback import record_feedback
@@ -55,7 +55,7 @@ from .phases import (
     Verdict,
 )
 from .precheck import Precheck, Route, Window, build_precheck
-from .provider import Provider
+from .provider import Provider, SessionEvent
 from .search import changelog_hits, current_versions, mark_versions, search_debian, search_launchpad
 from .skills import PIPELINE, also_search, load_skill, system_prompt
 from .tools import Submission, ToolSpec
@@ -169,8 +169,13 @@ class Pipeline:
     feedback_log: Path | None = None
     model: str = ""
     working_directory: Path | None = None
+    streaming: bool = False
     # Called with the phase name when a phase starts (for a progress line).
     on_phase: Callable[[str], None] | None = None
+    # Called with the completed PhaseOutcome after each phase finishes.
+    on_phase_done: Callable[[PhaseOutcome], None] | None = None
+    # Called with live session events (tool calls, reasoning deltas) while a phase runs.
+    on_event: Callable[[SessionEvent], None] | None = None
     checks: HostChecks = field(init=False)
 
     def __post_init__(self) -> None:
@@ -209,15 +214,23 @@ class Pipeline:
             task=task,
             tools=[self.tools[name] for name in skill.tools if name in self.tools],
             submission=submission,
-            skill_sha256=skill.sha256,
-            working_directory=self.working_directory,
-            max_calls=skill.max_calls,
+            options=PhaseOptions(
+                skill_sha256=skill.sha256,
+                working_directory=self.working_directory,
+                max_calls=skill.max_calls,
+                streaming=self.streaming,
+                on_event=self.on_event,
+            ),
         )
         outcome.phases.append(done)
         if not isinstance(done.result, model):
+            if self.on_phase_done is not None:
+                self.on_phase_done(done)
             return None
         if summary is not None:
             done.summary = summary(done.result)
+        if self.on_phase_done is not None:
+            self.on_phase_done(done)
         return done.result
 
     def _needs(self, phase: str) -> str:
@@ -536,10 +549,11 @@ class Pipeline:
             bug.v,
             report,
             assessment=bug.assessment,
-            regression=bug.regression.result,
+            regression=bug.regression,
             analysis=bug.analysis,
             fix=fix,
             fix_applies=bug.fix_applies,
+            context=bug.context,
         )
 
     def _record_feedback(self, outcome: BugOutcome) -> None:
@@ -597,16 +611,30 @@ def phase_totals(outcomes: list[BugOutcome]) -> dict[str, tuple[int, int, int]]:
     return {name: (s, i, o) for name, (s, i, o) in ranked}
 
 
+async def triage_one(pipeline: Pipeline, payload: dict[str, Any]) -> BugOutcome:
+    """Triage a single bug payload, recording any unexpected error rather than raising."""
+    bug = str(payload.get("number", ""))
+    try:
+        outcome = await pipeline.triage(payload)
+    except Exception as exc:
+        logger.warning("Bug %s: triage failed", bug, exc_info=True)
+        outcome = BugOutcome(bug=bug, error=f"{type(exc).__name__}: {exc}")
+    _log_outcome(outcome)
+    pipeline._record_feedback(outcome)
+    return outcome
+
+
 async def triage_bugs(
     pipeline: Pipeline,
     payloads: list[dict],
     *,
     on_progress: Callable[[int, int, str], None] | None = None,
+    on_outcome: Callable[[int, int, BugOutcome], None] | None = None,
 ) -> list[BugOutcome]:
     """Triage ``payloads`` sequentially, recording per-bug failures and continuing.
 
     ``on_progress`` (when given) is called as ``(index, total, bug)`` before each
-    bug, so a caller can drive a spinner/progress line.
+    bug, and ``on_outcome`` as ``(index, total, outcome)`` when each bug finishes.
     """
     total = len(payloads)
     outcomes: list[BugOutcome] = []
@@ -615,13 +643,9 @@ async def triage_bugs(
         if on_progress is not None:
             on_progress(index, total, bug)
         logger.info("Triaging bug %s (%d/%d)…", bug, index, total)
-        try:
-            outcome = await pipeline.triage(payload)
-        except Exception as exc:
-            logger.warning("Bug %s: triage failed", bug, exc_info=True)
-            outcome = BugOutcome(bug=bug, error=f"{type(exc).__name__}: {exc}")
-        _log_outcome(outcome)
-        pipeline._record_feedback(outcome)
+        outcome = await triage_one(pipeline, payload)
+        if on_outcome is not None:
+            on_outcome(index, total, outcome)
         outcomes.append(outcome)
     succeeded = sum(o.ok for o in outcomes)
     failed = sum(o.error is not None for o in outcomes)

@@ -94,6 +94,9 @@ def test_session_options_expose_only_our_tools(tmp_path):
     assert options["working_directory"] == str(tmp_path)
     assert options["model"] == "a-copilot-model"
     assert options["skip_custom_instructions"] is True
+    assert "streaming" not in options
+    streaming_spec = SessionSpec(system_prompt="SYS", task="T", tools=tools, streaming=True)
+    assert session_options(streaming_spec, _copilot())["streaming"] is True
 
 
 @pytest.mark.asyncio

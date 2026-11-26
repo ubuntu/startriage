@@ -2,20 +2,36 @@
 
 from __future__ import annotations
 
+import io
+import json
+from datetime import datetime, timezone
 from typing import cast
 
 import pytest
 
 from startriage.ai import (
+    AgentResult,
     FakeProvider,
     FakeTurn,
+    ProposedFix,
+    RunOptions,
+    analyze_work_items,
     parse_bug_number,
     payloads_from_tasks,
     run_agent_on_payloads,
+    work_item_from_payload,
 )
+from startriage.ai.contract import Importance, ProposedFixKind, SRUCandidate, TriageStatus
+from startriage.ai.results import derive_actions
+from startriage.analysis import ActionKind, ActionReadiness, CodeLocationInfo, FixCheckInfo
 from startriage.cli import _build_parser
-from startriage.config import AIConfig, StarTriageConfig
+from startriage.config import AIConfig, StarTriageConfig, load_config
+from startriage.output import OutputConfig, OutputFormat
+from startriage.report import emit_triage_outputs
+from startriage.sources.github.models import Issue, RepoResult
+from startriage.sources.github.triage import GithubTriage
 from startriage.sources.launchpad.models import Task
+from startriage.triage import build_filter
 
 _VALIDATION = {
     "verdict": "support",
@@ -152,3 +168,157 @@ def test_parser_ai_is_a_plain_flag():
     assert _build_parser().parse_args(["triage", "--ai"]).ai is True
     assert _build_parser().parse_args(["triage"]).ai_keep_workdir is False
     assert _build_parser().parse_args(["analyze", "--ai", "--ai-keep-workdir", "1"]).ai_keep_workdir is True
+    assert _build_parser().parse_args(["triage"]).ai_show_thinking is False
+    assert _build_parser().parse_args(["triage", "--ai", "--ai-show-thinking"]).ai_show_thinking is True
+    assert _build_parser().parse_args(["analyze", "--ai", "--ai-show-thinking", "1"]).ai_show_thinking is True
+
+
+# --- analyze_work_items, live progress & thinking --------------------------
+
+
+@pytest.mark.asyncio
+async def test_analyze_work_items_streams_progress_and_thinking():
+    turn = FakeTurn(
+        reasoning="Checking whether this is a config question.\nYes, ask on Discourse.",
+        calls=[("submit_validation", _VALIDATION)],
+        input_tokens=400,
+        output_tokens=50,
+    )
+    provider = FakeProvider([[turn], []])
+    config = StarTriageConfig()
+    items = [
+        work_item_from_payload({"number": "123", "package": "pkg", "title": "boom", "status": "New"}),
+        work_item_from_payload(
+            {"number": "456", "package": "pkg", "title": "secret", "private": True, "expiring": True}
+        ),
+    ]
+    progress_buf = io.StringIO()
+
+    batch = await analyze_work_items(
+        config,
+        items,
+        provider=provider,
+        options=RunOptions(
+            verbose=True,
+            show_thinking=True,
+            progress_stream=progress_buf,
+            progress_tty=False,
+        ),
+    )
+
+    assert batch is not None
+    assert provider.specs[0].streaming is True
+    assert len(batch.run.items) == 2
+    assert batch.run.items[0].snapshot.status == "New"
+    assert batch.run.items[1].snapshot.expiring is True
+    assert [a.kind for a in batch.run.items[0].actions] == [ActionKind.tracker_update]
+
+    out = progress_buf.getvalue()
+    assert "Checking whether this is a config question." in out
+    assert "[1/2] LP #123 (pkg): Invalid" in out
+    assert "[2/2] LP #456 (pkg): private (not sent)" in out
+
+
+def test_derive_actions_produces_multi_action_list_with_readiness():
+    result = AgentResult(
+        bug="200",
+        package="nginx",
+        status=TriageStatus.triaged,
+        importance=Importance.high,
+        series={"noble": TriageStatus.triaged, "questing": TriageStatus.fix_released},
+        tags=["server-todo", "bitesize"],
+        proposed_fix=ProposedFix(kind=ProposedFixKind.reference, value="https://example.test/commit/1"),
+        fix_checks={
+            "noble": FixCheckInfo(ref="noble", state="clean", patches_applied=True),
+            "devel": FixCheckInfo(ref="devel", state="already applied", patches_applied=True),
+        },
+        bitesize_verified=True,
+        locations=[CodeLocationInfo(path="src/ngx.c", line=42, ref="devel", note="null deref")],
+        sru_candidates=[SRUCandidate(series="noble", reason="clean backport")],
+        upstream_suggestion="Mention Ubuntu backport.",
+        upstream_url="https://github.com/nginx/nginx",
+    )
+
+    actions = derive_actions(result)
+
+    assert [a.kind for a in actions] == [
+        ActionKind.tracker_update,
+        ActionKind.prepare_fix,
+        ActionKind.upstream_report,
+    ]
+    fix_action = actions[1]
+    assert fix_action.readiness is ActionReadiness.ready
+    assert fix_action.params["package"] == "nginx"
+    assert fix_action.params["strategy"] == "upstream_reference"
+    assert fix_action.params["target_series"] == ["noble"]
+    assert fix_action.params["bitesize_verified"] is True
+
+    # Unmerged upstream fix drops readiness to needs_review.
+    unmerged = result.model_copy(update={"fix_unmerged": True})
+    assert derive_actions(unmerged)[1].readiness is ActionReadiness.needs_review
+
+    # Review-update "no action" yields a single none action.
+    noop = AgentResult(bug="201", package="nginx", status=TriageStatus.no_change)
+    assert [a.kind for a in derive_actions(noop)] == [ActionKind.none]
+
+
+# --- Stage 3 emit_triage_outputs -------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_emit_triage_outputs_suppresses_stdout_with_html_and_includes_ai_in_json(tmp_path):
+    now = datetime(2026, 10, 1, tzinfo=timezone.utc)
+    issue = Issue(1, "boom", "https://github.com/o/r/issues/1", "https://github.com/o/r", now, now, "open")
+    gh = GithubTriage(start=now.date(), end=now.date(), results=[RepoResult("o/r", issues=[issue])])
+    config = load_config(tmp_path / "none.toml")
+    opts = build_filter(config, interval="2026-10-01", sources="github")
+
+    provider = FakeProvider([_CANNED])
+    item = work_item_from_payload({"number": "123", "package": "pkg", "title": "boom"})
+    batch = await analyze_work_items(
+        config,
+        [item],
+        provider=provider,
+        options=RunOptions(progress_stream=io.StringIO(), progress_tty=False),
+    )
+    assert batch is not None
+    ai_md = batch.to_markdown()
+
+    # With --html, stdout receives no AI dump, and HTML embeds the AI run.
+    html_path = tmp_path / "triage.html"
+    md_path = tmp_path / "triage.md"
+    stdout = io.StringIO()
+    await emit_triage_outputs(
+        {"github": gh},
+        opts,
+        OutputConfig(fmt=OutputFormat.TERMINAL, out=stdout, html_path=html_path, markdown_path=md_path),
+        ai_run=batch.run,
+        ai_markdown=ai_md,
+    )
+    assert stdout.getvalue() == ""
+    assert "Automated triage" in md_path.read_text()
+    assert '<script type="application/json" id="ai-data">' in html_path.read_text()
+
+    # Without --html/--markdown, AI markdown goes to stdout.
+    stdout_only = io.StringIO()
+    await emit_triage_outputs(
+        {"github": gh},
+        opts,
+        OutputConfig(fmt=OutputFormat.TERMINAL, out=stdout_only),
+        ai_run=batch.run,
+        ai_markdown=ai_md,
+    )
+    assert "## LP #123 — pkg — boom on start" in stdout_only.getvalue()
+
+    # With --format json, AI run is attached under "ai".
+    json_out = io.StringIO()
+    await emit_triage_outputs(
+        {"github": gh},
+        opts,
+        OutputConfig(fmt=OutputFormat.JSON, out=json_out),
+        ai_run=batch.run,
+        ai_markdown=ai_md,
+    )
+    parsed = json.loads(json_out.getvalue())
+    assert parsed["ai"]["schema_version"] == 1
+    assert parsed["ai"]["items"][0]["key"] == "123"

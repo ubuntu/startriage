@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from .agent import BugOutcome, run_phase
 from .contract import AgentResult, ProposedFix
-from .pipeline import Pipeline, triage_bugs
+from .pipeline import Pipeline, triage_bugs, triage_one
 from .provider import (
     CopilotProvider,
     FakeProvider,
     FakeTurn,
     Provider,
+    SessionEvent,
+    SessionEventKind,
     SessionResult,
     SessionSpec,
     build_client_kwargs,
@@ -23,6 +25,10 @@ from .render import (
     render_report,
 )
 from .run import (
+    AITriageBatch,
+    RunOptions,
+    analyze_triage_results,
+    analyze_work_items,
     describe_bug_specs,
     gather_user_bug_payloads,
     parse_bug_number,
@@ -30,9 +36,12 @@ from .run import (
     run_agent_on_payloads,
     run_ai_over_bug_specs,
     run_ai_over_triage_results,
+    work_item_from_payload,
+    work_items_from_tasks,
 )
 
 __all__ = [
+    "AITriageBatch",
     "AgentResult",
     "BugOutcome",
     "CopilotProvider",
@@ -41,8 +50,13 @@ __all__ = [
     "Pipeline",
     "ProposedFix",
     "Provider",
+    "RunOptions",
+    "SessionEvent",
+    "SessionEventKind",
     "SessionResult",
     "SessionSpec",
+    "analyze_triage_results",
+    "analyze_work_items",
     "append_report",
     "build_client_kwargs",
     "build_provider",
@@ -59,4 +73,7 @@ __all__ = [
     "run_ai_over_triage_results",
     "run_phase",
     "triage_bugs",
+    "triage_one",
+    "work_item_from_payload",
+    "work_items_from_tasks",
 ]

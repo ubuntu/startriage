@@ -22,10 +22,12 @@ with `lp_get_bug` only if the new comments are not enough.
    (`pkg_changelog`, `pattern` the bug number).
 2. Decide the action:
    - `none`: nothing new for a human. "Me too" without details, bot noise
-     (janitor, apport retracing), subscriptions, tag shuffles.
+     (janitor, apport retracing), subscriptions, tag shuffles, or an expiring
+     bug that still has no new actionable information (letting it expire / no
+     action is often the best choice).
    - `comment`: a reply would move the bug forward, e.g. the reporter asked a
-     question, or an Incomplete bug is about to expire and still lacks the asked
-     information.
+     question, or an expiring Incomplete bug has partial new input worth a
+     targeted follow-up.
    - `change`: the state is now wrong, e.g. the reporter answered an Incomplete
      bug (back to Confirmed/Triaged), an SRU verification is done
      (`verification-done-<series>`), or a fix was released.

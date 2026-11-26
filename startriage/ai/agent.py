@@ -8,13 +8,13 @@ pipeline can continue where it can.
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from .contract import AgentResult
 from .phases import PhaseOutcome, PhaseState
-from .provider import Provider, SessionSpec
+from .provider import Provider, SessionEvent, SessionSpec
 from .supervisor import MAX_CALLS
 from .tools import Submission, ToolSpec
 
@@ -44,6 +44,17 @@ class BugOutcome:
         return self.result is None and self.error is None
 
 
+@dataclass(frozen=True)
+class PhaseOptions:
+    """Optional runtime settings for one phase session."""
+
+    skill_sha256: str = ""
+    working_directory: Path | None = None
+    max_calls: int = MAX_CALLS
+    streaming: bool = False
+    on_event: Callable[[SessionEvent], None] | None = None
+
+
 async def run_phase(
     provider: Provider,
     *,
@@ -53,22 +64,23 @@ async def run_phase(
     task: str,
     tools: Sequence[ToolSpec],
     submission: Submission,
-    skill_sha256: str = "",
-    working_directory: Path | None = None,
-    max_calls: int = MAX_CALLS,
+    options: PhaseOptions | None = None,
 ) -> PhaseOutcome:
     """Run one phase session and return what it submitted (or why it failed)."""
+    opts = options or PhaseOptions()
     spec = SessionSpec(
         system_prompt=system_prompt,
         task=task,
         tools=[*tools, submission.tool()],
-        working_directory=working_directory,
-        max_calls=max_calls,
+        working_directory=opts.working_directory,
+        max_calls=opts.max_calls,
         nudge=NUDGE.format(submit=submission.name),
         is_done=lambda: submission.result is not None,
+        streaming=opts.streaming,
+        on_event=opts.on_event,
     )
     logger.debug("Bug %s %s: %d-char prompt, %d-char task", bug, phase, len(system_prompt), len(task))
-    outcome = PhaseOutcome(phase=phase, state=PhaseState.failed, sessions=1, skill_sha256=skill_sha256)
+    outcome = PhaseOutcome(phase=phase, state=PhaseState.failed, sessions=1, skill_sha256=opts.skill_sha256)
     try:
         session = await provider.run(spec)
     except Exception as exc:

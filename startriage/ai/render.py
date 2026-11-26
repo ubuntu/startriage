@@ -22,15 +22,6 @@ from .pipeline import phase_totals
 
 SRU_NOTICE = "SRU feasibility not assessed; at the triager's discretion."
 
-#: Heading + notice prepended when an AI report is appended to a triage markdown
-#: file, to keep the AI-generated content clearly separated from the human report.
-AI_APPEND_NOTICE = (
-    "---\n\n"
-    "> **AI-generated triage aid.** The section below was produced by an automated "
-    "agent. Review it critically — do **not** paste it into the official triage "
-    "report verbatim.\n\n"
-)
-
 
 def _render_proposed_fix(fix: ProposedFix) -> str:
     value = fix.value.strip()
@@ -244,27 +235,22 @@ def render_bug_metadata(payloads: list[dict[str, Any]]) -> str:
 
 
 def append_report(path: Path, content: str) -> Path:
-    """Append an AI ``content`` report to an existing markdown file at ``path``.
-
-    A horizontal rule and a notice (:data:`AI_APPEND_NOTICE`) are inserted first so
-    the AI-generated section is clearly separated from the human-written triage
-    report and is not mistaken for part of it.
-    """
+    """Append an AI ``content`` report to an existing markdown file at ``path``."""
     with path.open("a", encoding="utf-8") as fh:
-        fh.write("\n\n" + AI_APPEND_NOTICE + content)
+        fh.write("\n\n" + content)
     return path
 
 
 def emit_ai_report(report: str, markdown_path: Path | None) -> None:
     """Emit an AI ``report`` for a ``triage --ai`` run.
 
-    With ``--markdown`` the AI section is appended (behind :data:`AI_APPEND_NOTICE`)
-    to that same file, so the human triage report and the AI aid live in one
-    cohesive document. Without ``--markdown`` the report is printed to stdout,
-    together with the normal triage output that already went there.
+    With ``--markdown`` the AI section is appended to that same file, so the
+    human triage report and the AI aid live in one cohesive document. Without
+    ``--markdown`` the report is printed to stdout, together with the normal
+    triage output that already went there.
     """
     if markdown_path is not None:
         append_report(markdown_path, report)
         print(f"AI triage appended to {markdown_path}")
     else:
-        print("\n" + AI_APPEND_NOTICE + report)
+        print("\n" + report)

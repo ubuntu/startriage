@@ -1,18 +1,16 @@
 """End-to-end orchestration that wires the AI layer to the CLI.
 
-Two entry points feed bugs to the agent and render a report:
+Work is structured in two steps:
 
-- :func:`gather_user_bug_payloads` resolves user-supplied bug specs (URL,
-  ``NNNNNN`` or ``#NNNNNN``) into agent payloads (``analyze``).
-- :func:`payloads_from_tasks` turns already-fetched triage tasks into payloads
-  (``triage --ai``).
+- Collect :class:`~startriage.analysis.WorkItem` objects (each carrying its
+  tracker state snapshot and raw payload) via :func:`gather_user_work_items`
+  (``analyze``) or :func:`collect_triage_work_items` (``triage --ai``).
+- Analyze each item sequentially with :func:`analyze_work_items`, producing a
+  structured :class:`~startriage.analysis.AIRun` (plus the raw
+  :class:`~startriage.ai.agent.BugOutcome` list for full markdown rendering).
 
-Both hand their payloads to :func:`run_agent_on_payloads`, which runs the agent
-sequentially and returns the rendered markdown; emitting it (printing or folding
-it into a triage markdown file) is left to the caller. :func:`describe_bug_specs`
-shares the same gather step but only renders the raw bug metadata (``analyze``
-without ``--ai``). Launchpad access is lazily imported inside the gather helpers
-so non-AI commands and offline tests never pull in launchpadlib.
+Launchpad access is lazily imported inside the gather helpers so non-AI
+commands and offline tests never pull in launchpadlib.
 """
 
 from __future__ import annotations
@@ -22,21 +20,25 @@ import contextlib
 import logging
 import re
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Generator
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import IO, TYPE_CHECKING, Any
 
 import aiohttp
 import platformdirs
 
+from ..analysis import AIRun, ItemAnalysis, ItemSnapshot, PhaseCost, WorkItem
 from ..config import StarTriageConfig, resolve_team_name
-from ..spinner import Spinner
+from .agent import BugOutcome
 from .checks import URLChecker
 from .feedback import default_feedback_log
-from .pipeline import Pipeline, triage_bugs
+from .pipeline import Pipeline, phase_totals, triage_one
 from .precheck import Window
+from .progress import AIProgress
 from .provider import Provider, build_provider
 from .render import render_bug_metadata, render_report
+from .results import to_item_analysis
 from .tools import ReadOnlyHTTP, ToolContext, build_tools, debian, enabled_tool_names
 
 if TYPE_CHECKING:
@@ -55,6 +57,17 @@ _BARE_BUG = re.compile(r"^#?(\d+)$")
 _URL_BUG = re.compile(r"launchpad\.net/(?:.*/)?(?:\+bug|bugs)/(\d+)", re.IGNORECASE)
 
 
+@dataclass
+class AITriageBatch:
+    """Result of an AI run: structured :class:`AIRun` plus raw outcomes for markdown rendering."""
+
+    run: AIRun
+    outcomes: list[BugOutcome] = field(default_factory=list)
+
+    def to_markdown(self) -> str:
+        return render_report(self.outcomes, tools=self.run.tools)
+
+
 def parse_bug_number(spec: str) -> str:
     """Extract a Launchpad bug number from a bare ``NNNNNN``, ``#NNNNNN`` or LP URL.
 
@@ -70,6 +83,33 @@ def parse_bug_number(spec: str) -> str:
     if url:
         return url.group(1)
     raise ValueError(f"could not parse a Launchpad bug number from {spec!r}")
+
+
+def work_item_from_payload(payload: dict[str, Any], *, source: str = "launchpad") -> WorkItem:
+    """Wrap a raw bug payload as a :class:`WorkItem` with its current tracker snapshot."""
+    number = str(payload.get("number", ""))
+    series: dict[str, str] = {}
+    for affected in payload.get("affected", []) or []:
+        name = affected.get("series")
+        status = affected.get("status")
+        if name and status:
+            series[name] = status
+    return WorkItem(
+        source=source,
+        key=number,
+        url=payload.get("url") or (f"https://bugs.launchpad.net/bugs/{number}" if number else ""),
+        package=payload.get("package") or "",
+        title=payload.get("short_title") or payload.get("title") or "",
+        state=ItemSnapshot(
+            status=payload.get("status") or "",
+            importance=payload.get("importance") or "",
+            series=series,
+            tags=list(payload.get("tags") or []),
+            assignees=list(payload.get("assignees") or []),
+            expiring=bool(payload.get("expiring")),
+        ),
+        payload=payload,
+    )
 
 
 def gather_user_bug_payloads(lp: Launchpad, bug_specs: list[str]) -> list[dict[str, Any]]:
@@ -114,6 +154,11 @@ def payloads_from_tasks(tasks: list[Task]) -> list[dict[str, Any]]:
     return payloads
 
 
+def work_items_from_tasks(tasks: list[Task]) -> list[WorkItem]:
+    """Build :class:`WorkItem` objects (with tracker state snapshots) from Launchpad tasks."""
+    return [work_item_from_payload(p) for p in payloads_from_tasks(tasks)]
+
+
 def team_members(lp: Launchpad, team: str) -> frozenset[str]:
     """Launchpad names of the team and its members (blocking LP access)."""
     try:
@@ -124,16 +169,6 @@ def team_members(lp: Launchpad, team: str) -> frozenset[str]:
             "Could not read the members of %s; no activity counts as the team's", team, exc_info=True
         )
         return frozenset()
-
-
-def _make_spinner(total: int) -> Spinner:
-    """Return a status spinner for the triage run.
-
-    The spinner is a no-op when stderr is not a TTY (piped/CI), so callers can
-    always use it unconditionally; that TTY handling lives in :class:`Spinner`.
-    """
-    noun = "bug" if total == 1 else "bugs"
-    return Spinner(set(), status=f"Preparing to triage {total} {noun}…")
 
 
 def _github_credentials(config: StarTriageConfig) -> dict[str, dict[str, str]] | None:
@@ -149,7 +184,7 @@ def _github_credentials(config: StarTriageConfig) -> dict[str, dict[str, str]] |
 
 
 @contextlib.contextmanager
-def scratch_dir(keep: bool = False) -> Iterator[Path]:
+def scratch_dir(keep: bool = False) -> Generator[Path]:
     """A per-run working directory for the agent session, removed afterwards unless ``keep``."""
     root = platformdirs.user_cache_path("startriage") / "ai"
     root.mkdir(parents=True, exist_ok=True)
@@ -164,54 +199,62 @@ def scratch_dir(keep: bool = False) -> Iterator[Path]:
         yield Path(name)
 
 
-async def run_agent_on_payloads(
+@dataclass(frozen=True)
+class RunOptions:
+    """Display and scratch-directory options for an AI run."""
+
+    keep_workdir: bool = False
+    verbose: bool = False
+    show_thinking: bool = False
+    progress_stream: IO[str] | None = None
+    progress_tty: bool | None = None
+
+
+async def analyze_work_items(
     config: StarTriageConfig,
-    payloads: list[dict[str, Any]],
+    items: list[WorkItem],
     *,
     lp: Launchpad | None = None,
     provider: Provider | None = None,
     team: frozenset[str] = frozenset(),
     window: Window | None = None,
-    keep_workdir: bool = False,
-) -> str | None:
-    """Run the agent over ``payloads`` and return the rendered markdown report.
+    options: RunOptions | None = None,
+) -> AITriageBatch | None:
+    """Analyze each :class:`WorkItem` sequentially and return an :class:`AITriageBatch`.
 
-    Returns the markdown string, or ``None`` when there is nothing to triage.
-    Emitting the report (printing it or folding it into a triage markdown file)
-    is left to the caller. When ``provider`` is omitted it is built from
-    ``config`` (validating credentials, which may raise
-    :class:`~startriage.config.AIConfigError`). The agent gets the tools enabled
-    in ``[ai.tools]``; Launchpad tools use ``lp``. ``team`` (member names) and
-    ``window`` (the triage date range) drive the precheck routes. The scratch
-    directory (fetched sources, session files) is kept with ``keep_workdir``.
+    Returns ``None`` when ``items`` is empty. Live progress (and optional
+    thinking text when ``options.show_thinking`` is enabled) is streamed to
+    ``options.progress_stream`` (default stderr); each finished item leaves its
+    summary line on the terminal so the next item starts on a new line.
     """
-    if not payloads:
+    if not items:
         logger.info("No bugs to triage with the AI agent.")
         return None
 
+    opts = options or RunOptions()
     if provider is None:
         provider = build_provider(config.ai)
 
     tool_names = enabled_tool_names(config.ai)
     logger.info("AI agent tools: %s", ", ".join(tool_names) or "none")
-    spinner = _make_spinner(len(payloads))
-    current = {"label": "bug", "count": ""}
+    progress = AIProgress(
+        len(items),
+        verbose=opts.verbose,
+        show_thinking=opts.show_thinking,
+        stream=opts.progress_stream,
+        is_tty=opts.progress_tty,
+    )
 
-    def on_progress(index: int, total: int, bug: str) -> None:
-        current["label"] = f"LP #{bug}" if bug else "bug"
-        current["count"] = f"{index}/{total}"
-        spinner.set_status(f"Triaging {current['label']} ({current['count']})…")
+    outcomes: list[BugOutcome] = []
+    analyses: list[ItemAnalysis] = []
 
-    def on_phase(phase: str) -> None:
-        spinner.set_status(f"Triaging {current['label']} · {phase} ({current['count']})…")
-
-    async with aiohttp.ClientSession() as http_session, spinner:
+    async with aiohttp.ClientSession() as http_session, progress:
         http = ReadOnlyHTTP(
             http_session,
             allowed_posts=debian.ALLOWED_POSTS,
             credentials=_github_credentials(config) if "github_search" in tool_names else None,
         )
-        with scratch_dir(keep_workdir) as workdir:
+        with scratch_dir(opts.keep_workdir) as workdir:
             tools = build_tools(ToolContext(lp=lp, http=http, workdir=workdir), tool_names)
             pipeline = Pipeline(
                 provider=provider,
@@ -223,13 +266,60 @@ async def run_agent_on_payloads(
                 urls=URLChecker(http if "verify_url" in tool_names else None),
                 feedback=config.ai.suggest_improvements,
                 feedback_log=default_feedback_log() if config.ai.suggest_improvements else None,
-                model=config.ai.model or "",
+                model=config.ai.model or provider.model,
                 working_directory=workdir,
-                on_phase=on_phase,
+                streaming=opts.show_thinking,
+                on_phase=progress.on_phase_start,
+                on_phase_done=progress.on_phase_done,
+                on_event=progress.on_event,
             )
-            outcomes = await triage_bugs(pipeline, payloads, on_progress=on_progress)
+            total = len(items)
+            for index, item in enumerate(items, start=1):
+                progress.on_item_start(index, total, item)
+                logger.info("Triaging bug %s (%d/%d)…", item.key, index, total)
+                outcome = await triage_one(pipeline, item.payload)
+                analysis = to_item_analysis(outcome, item)
+                progress.on_item_done(index, total, analysis)
+                outcomes.append(outcome)
+                analyses.append(analysis)
 
-    return render_report(outcomes, tools=tool_names)
+    totals = {
+        name: PhaseCost(sessions=s, input_tokens=i, output_tokens=o)
+        for name, (s, i, o) in phase_totals(outcomes).items()
+    }
+    run = AIRun(
+        model=config.ai.model or provider.model,
+        tools=tool_names,
+        items=analyses,
+        totals=totals,
+    )
+    return AITriageBatch(run=run, outcomes=outcomes)
+
+
+async def run_agent_on_payloads(
+    config: StarTriageConfig,
+    payloads: list[dict[str, Any]],
+    *,
+    lp: Launchpad | None = None,
+    provider: Provider | None = None,
+    team: frozenset[str] = frozenset(),
+    window: Window | None = None,
+    keep_workdir: bool = False,
+    verbose: bool = False,
+    show_thinking: bool = False,
+) -> str | None:
+    """Run the agent over ``payloads`` and return the rendered markdown report."""
+    items = [work_item_from_payload(p) for p in payloads]
+    batch = await analyze_work_items(
+        config,
+        items,
+        lp=lp,
+        provider=provider,
+        team=team,
+        window=window,
+        options=RunOptions(keep_workdir=keep_workdir, verbose=verbose, show_thinking=show_thinking),
+    )
+    return batch.to_markdown() if batch is not None else None
 
 
 async def run_ai_over_bug_specs(
@@ -239,6 +329,8 @@ async def run_ai_over_bug_specs(
     *,
     provider: Provider | None = None,
     keep_workdir: bool = False,
+    verbose: bool = False,
+    show_thinking: bool = False,
 ) -> str | None:
     """Resolve user-supplied bug specs and run the agent, returning the report.
 
@@ -257,7 +349,14 @@ async def run_ai_over_bug_specs(
     else:
         team = await asyncio.to_thread(team_members, lp, lp_team)
     return await run_agent_on_payloads(
-        config, payloads, lp=lp, provider=provider, team=team, keep_workdir=keep_workdir
+        config,
+        payloads,
+        lp=lp,
+        provider=provider,
+        team=team,
+        keep_workdir=keep_workdir,
+        verbose=verbose,
+        show_thinking=show_thinking,
     )
 
 
@@ -274,28 +373,54 @@ async def describe_bug_specs(lp: Launchpad, bug_specs: list[str]) -> str | None:
     return render_bug_metadata(payloads)
 
 
+async def analyze_triage_results(
+    config: StarTriageConfig,
+    results: Mapping[str, TriageResult],
+    *,
+    provider: Provider | None = None,
+    options: RunOptions | None = None,
+) -> AITriageBatch | None:
+    """Collect WorkItems (including expiring bugs) from triage results and run AI analysis."""
+    from ..sources.launchpad.triage import LaunchpadTriage
+
+    result = results.get("launchpad")
+    if not isinstance(result, LaunchpadTriage):
+        return await analyze_work_items(config, [], provider=provider, options=options)
+
+    all_tasks = [*result.tasks.tasks, *result.tasks.expire_level1, *result.tasks.expire_level2]
+    items = await asyncio.to_thread(work_items_from_tasks, all_tasks)
+    lp = result.tasks.lp
+    team = await asyncio.to_thread(team_members, lp, result.team_config.lp_team) if items else frozenset()
+    window = (result.filter.start, result.filter.end) if result.filter.start and result.filter.end else None
+    return await analyze_work_items(
+        config,
+        items,
+        lp=lp,
+        provider=provider,
+        team=team,
+        window=window,
+        options=options,
+    )
+
+
 async def run_ai_over_triage_results(
     config: StarTriageConfig,
     results: Mapping[str, TriageResult],
     *,
     provider: Provider | None = None,
     keep_workdir: bool = False,
+    verbose: bool = False,
+    show_thinking: bool = False,
 ) -> str | None:
     """Run the agent over the Launchpad tasks gathered by a normal triage run.
 
     Returns the rendered markdown, or ``None`` when there are no Launchpad tasks
-    to triage. Launchpad payload construction runs off-thread.
+    to triage.
     """
-    from ..sources.launchpad.triage import LaunchpadTriage
-
-    result = results.get("launchpad")
-    if not isinstance(result, LaunchpadTriage):
-        return await run_agent_on_payloads(config, [], provider=provider)
-
-    payloads = await asyncio.to_thread(payloads_from_tasks, list(result.tasks.tasks))
-    lp = result.tasks.lp
-    team = await asyncio.to_thread(team_members, lp, result.team_config.lp_team) if payloads else frozenset()
-    window = (result.filter.start, result.filter.end) if result.filter.start and result.filter.end else None
-    return await run_agent_on_payloads(
-        config, payloads, lp=lp, provider=provider, team=team, window=window, keep_workdir=keep_workdir
+    batch = await analyze_triage_results(
+        config,
+        results,
+        provider=provider,
+        options=RunOptions(keep_workdir=keep_workdir, verbose=verbose, show_thinking=show_thinking),
     )
+    return batch.to_markdown() if batch is not None else None
